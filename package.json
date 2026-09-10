@@ -1,0 +1,9 @@
+{
+  "name": "gofile-stremio-addon",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Stremio addon that lists and plays public GoFile videos",
+  "scripts": {
+    "start": "node server.js"
+  }
+}

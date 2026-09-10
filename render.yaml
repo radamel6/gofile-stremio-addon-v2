@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: gofile-stremio-addon
+    runtime: node
+    buildCommand: npm install
+    startCommand: npm start
+    plan: free

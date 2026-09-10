@@ -31,7 +31,7 @@ const PORT =
   Number(process.env.PORT || 10000);
 
 const GOFILE_FOLDER =
-  process.env.GOFILE_FOLDER || "Hg4qUe";
+  process.env.GOFILE_FOLDER || "xOZ1Mzd3";
 
 const GOFILE_SORT =
   process.env.GOFILE_SORT || "name_asc";

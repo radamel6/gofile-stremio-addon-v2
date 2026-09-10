@@ -2495,7 +2495,7 @@ const manifest = {
     "1.2.0",
 
   name:
-    "GoFile Videos",
+    "GoFile Vídeos CL",
 
   description:
     "Streams videos from a GoFile folder.",
@@ -2526,7 +2526,7 @@ const manifest = {
         "gofile-videos",
 
       name:
-        "GoFile Videos"
+        "GoFile Vídeos CL"
 
     }
 

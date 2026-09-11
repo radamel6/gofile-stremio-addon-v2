@@ -30,7 +30,7 @@ GOFILE_SORT=date_asc
 const PORT =
   Number(process.env.PORT || 10000);
 
-let GOFILE_FOLDER =
+const GOFILE_FOLDER =
   process.env.GOFILE_FOLDER || "xOZ1Mzd3";
 
 const GOFILE_SORT =
@@ -2542,7 +2542,7 @@ const manifest = {
       true,
 
     configurationRequired:
-      true
+      false
 
   }
 
@@ -3527,307 +3527,6 @@ async function proxyThumbnail(
 =========================================================
 */
 
-function configurationPage(currentFolder = "") {
-  const safeFolder = String(currentFolder || "")
-    .replace(/\\/g, "\\\\")
-    .replace(/"/g, '\\"');
-
-  return `<!DOCTYPE html>
-<html lang="pt">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>GoFile → Stremio</title>
-
-  <style>
-    * {
-      box-sizing: border-box;
-    }
-
-    body {
-      margin: 0;
-      min-height: 100vh;
-      background: #111;
-      color: #fff;
-      font-family: Arial, sans-serif;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      padding: 20px;
-    }
-
-    .container {
-      width: 100%;
-      max-width: 600px;
-      background: #1d1d1d;
-      border-radius: 16px;
-      padding: 30px;
-      box-shadow: 0 10px 40px rgba(0,0,0,.4);
-    }
-
-    h1 {
-      margin-top: 0;
-      font-size: 28px;
-    }
-
-    .description {
-      color: #aaa;
-      line-height: 1.5;
-      margin-bottom: 25px;
-    }
-
-    label {
-      display: block;
-      margin-bottom: 8px;
-      font-weight: bold;
-    }
-
-    input {
-      width: 100%;
-      padding: 14px;
-      border-radius: 8px;
-      border: 1px solid #444;
-      background: #111;
-      color: #fff;
-      font-size: 16px;
-      outline: none;
-    }
-
-    input:focus {
-      border-color: #777;
-    }
-
-    button {
-      width: 100%;
-      margin-top: 15px;
-      padding: 14px;
-      border: 0;
-      border-radius: 8px;
-      background: #4caf50;
-      color: white;
-      font-size: 16px;
-      font-weight: bold;
-      cursor: pointer;
-    }
-
-    button:hover {
-      background: #43a047;
-    }
-
-    button:disabled {
-      opacity: .6;
-      cursor: wait;
-    }
-
-    .result {
-      margin-top: 20px;
-      padding: 18px;
-      border-radius: 10px;
-      display: none;
-      line-height: 1.6;
-    }
-
-    .success {
-      display: block;
-      background: #16351d;
-      border: 1px solid #2e7d32;
-    }
-
-    .error {
-      display: block;
-      background: #351616;
-      border: 1px solid #a83232;
-    }
-
-    .install {
-      background: #8e44ad;
-      margin-top: 20px;
-    }
-
-    .install:hover {
-      background: #7d3c98;
-    }
-
-    .count {
-      font-size: 22px;
-      font-weight: bold;
-    }
-
-    .small {
-      color: #aaa;
-      font-size: 13px;
-      margin-top: 12px;
-    }
-  </style>
-</head>
-
-<body>
-
-<div class="container">
-
-  <h1>GoFile → Stremio</h1>
-
-  <div class="description">
-    Escolhe a pasta GoFile que queres utilizar no addon.
-    Primeiro vamos verificar se a pasta existe e quantos vídeos contém.
-  </div>
-
-  <label for="folder">
-    ID ou URL da pasta GoFile
-  </label>
-
-  <input
-    id="folder"
-    type="text"
-    placeholder="Ex: Hg4qUe ou https://gofile.io/d/Hg4qUe"
-    value="${safeFolder}"
-  >
-
-  <button id="checkButton" onclick="checkFolder()">
-    Verificar pasta
-  </button>
-
-  <div id="result" class="result"></div>
-
-</div>
-
-<script>
-
-function extractFolderId(value) {
-  value = String(value || "").trim();
-
-  if (!value) {
-    return null;
-  }
-
-  // URL GoFile
-  const match = value.match(/gofile\\.io\\/d\\/([^/?#]+)/i);
-
-  if (match) {
-    return match[1];
-  }
-
-  // Apenas ID
-  if (/^[A-Za-z0-9_-]+$/.test(value)) {
-    return value;
-  }
-
-  return null;
-}
-
-async function checkFolder() {
-
-  const input = document.getElementById("folder");
-  const button = document.getElementById("checkButton");
-  const result = document.getElementById("result");
-
-  const folderId = extractFolderId(input.value);
-
-  result.className = "result";
-
-  if (!folderId) {
-    result.className = "result error";
-    result.innerHTML =
-      "❌ Não consegui identificar o ID da pasta GoFile.";
-    return;
-  }
-
-  button.disabled = true;
-  button.textContent = "A verificar...";
-
-  result.style.display = "block";
-  result.className = "result";
-  result.innerHTML = "⏳ A verificar a pasta GoFile...";
-
-  try {
-
-    const response = await fetch(
-      "/api/check-folder?id=" + encodeURIComponent(folderId)
-    );
-
-    const data = await response.json();
-
-    if (!response.ok || !data.ok) {
-      throw new Error(data.error || "Não foi possível verificar a pasta.");
-    }
-
-    result.className = "result success";
-
-    result.innerHTML = \`
-      <div>✅ <strong>Pasta encontrada</strong></div>
-
-      <div>
-        ID:
-        <strong>\${escapeHtml(data.folderId)}</strong>
-      </div>
-
-      <div class="count">
-        \${data.videoCount} vídeos
-      </div>
-
-      <div class="small">
-        A pasta será usada pelo addon quando o instalares.
-      </div>
-
-      <button class="install" onclick="installAddon('\${encodeURIComponent(data.folderId)}')">
-        Instalar addon no Stremio
-      </button>
-    \`;
-
-  } catch (error) {
-
-    result.className = "result error";
-
-    result.innerHTML =
-      "❌ <strong>Erro:</strong> " +
-      escapeHtml(error.message);
-
-  } finally {
-
-    button.disabled = false;
-    button.textContent = "Verificar pasta";
-
-  }
-}
-
-function installAddon(encodedFolder) {
-
-  const folderId = decodeURIComponent(encodedFolder);
-
-  /*
-   * A pasta já foi validada.
-   * O servidor vai receber este ID e colocá-lo
-   * na variável global GOFILE_FOLDER.
-   */
-
-  const manifestUrl =
-    window.location.origin +
-    "/manifest.json?folder=" +
-    encodeURIComponent(folderId);
-
-  const stremioUrl =
-    "stremio://" +
-    manifestUrl.replace(/^https?:\\/\\//, "");
-
-  window.location.href = stremioUrl;
-}
-
-function escapeHtml(value) {
-
-  return String(value)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
-}
-
-</script>
-
-</body>
-</html>`;
-}
-
 const server =
   http.createServer(
     async (
@@ -3883,70 +3582,6 @@ const server =
 
         }
 
-       if (parsed.pathname === "/configure") {
-  res.writeHead(200, {
-    "Content-Type": "text/html; charset=utf-8"
-  });
-
-  res.end(configurationPage(GOFILE_FOLDER));
-  return;
-}
-
-if (parsed.pathname === "/api/check-folder") {
-
-  const folderId = parsed.searchParams.get("id");
-
-  if (!folderId) {
-    sendJson(res, {
-      ok: false,
-      error: "É necessário indicar o ID da pasta."
-    }, 400);
-
-    return;
-  }
-
-  try {
-
-    const accountToken = await createAccount();
-    const websiteToken = await generateWebsiteToken(accountToken);
-
-    const contents = await getContentsWithRetry(
-      folderId,
-      accountToken,
-      websiteToken
-    );
-
-    const rawFiles = extractFiles(contents);
-
-    const videoFiles = rawFiles.filter(file => {
-      const name =
-        file.name ||
-        file.filename ||
-        file.fileName ||
-        "";
-
-      return isVideo(name);
-    });
-
-    sendJson(res, {
-      ok: true,
-      folderId,
-      videoCount: videoFiles.length,
-      folderUrl: `${GOFILE_WEB}/d/${folderId}`
-    });
-
-  } catch (error) {
-
-    console.error("Erro ao verificar pasta:", error);
-
-    sendJson(res, {
-      ok: false,
-      error: error.message || "Erro ao verificar a pasta GoFile."
-    }, 500);
-  }
-
-  return;
-}
 
         /*
         ---------------------------------------------------
@@ -3955,16 +3590,16 @@ if (parsed.pathname === "/api/check-folder") {
         */
 
         if (
-  pathname ===
-  "/manifest.json"
-) {
+          pathname ===
+          "/manifest.json"
+        ) {
 
-  return sendJson(
-    res,
-    manifest
-  );
+          return sendJson(
+            res,
+            manifest
+          );
 
-}
+        }
 
 
         /*

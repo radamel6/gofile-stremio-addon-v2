@@ -2877,7 +2877,7 @@ const manifest = {
       true,
 
     configurationRequired:
-      true
+      false
 
   }
 

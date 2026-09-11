@@ -30,7 +30,12 @@ GOFILE_SORT=date_asc
 const PORT =
   Number(process.env.PORT || 10000);
 
-const GOFILE_FOLDER =
+/*
+ * IMPORTANTE:
+ * let em vez de const porque a pasta pode ser
+ * alterada através da página /configure.
+ */
+let GOFILE_FOLDER =
   process.env.GOFILE_FOLDER || "xOZ1Mzd3";
 
 const GOFILE_SORT =
@@ -1582,12 +1587,6 @@ async function getFileLink(
     let realLink = null;
 
 
-    /*
-    -------------------------------------------------------
-    Real video link
-    -------------------------------------------------------
-    */
-
     const possibleLinks = [
 
       data.link,
@@ -1618,24 +1617,12 @@ async function getFileLink(
     }
 
 
-    /*
-    -------------------------------------------------------
-    Thumbnail
-    -------------------------------------------------------
-    */
-
     const thumbnail =
       typeof data.thumbnail === "string" &&
       data.thumbnail.startsWith("http")
         ? data.thumbnail
         : null;
 
-
-    /*
-    -------------------------------------------------------
-    Metadata
-    -------------------------------------------------------
-    */
 
     const createTime =
       Number(
@@ -2127,12 +2114,6 @@ function sortFiles(
     GOFILE_SORT
   ) {
 
-    /*
-    -------------------------------------------------------
-    NAME A → Z
-    -------------------------------------------------------
-    */
-
     case "name_asc":
 
       sorted.sort(
@@ -2154,12 +2135,6 @@ function sortFiles(
       break;
 
 
-    /*
-    -------------------------------------------------------
-    NAME Z → A
-    -------------------------------------------------------
-    */
-
     case "name_desc":
 
       sorted.sort(
@@ -2180,12 +2155,6 @@ function sortFiles(
 
       break;
 
-
-    /*
-    -------------------------------------------------------
-    DATE NEWEST → OLDEST
-    -------------------------------------------------------
-    */
 
     case "date_desc":
 
@@ -2215,12 +2184,6 @@ function sortFiles(
       break;
 
 
-    /*
-    -------------------------------------------------------
-    DATE OLDEST → NEWEST
-    -------------------------------------------------------
-    */
-
     case "date_asc":
 
       sorted.sort(
@@ -2248,12 +2211,6 @@ function sortFiles(
 
       break;
 
-
-    /*
-    -------------------------------------------------------
-    INVALID VALUE
-    -------------------------------------------------------
-    */
 
     default:
 
@@ -2374,15 +2331,6 @@ async function loadFolder(
       );
 
 
-    /*
-    -------------------------------------------------------
-    The folder API often returns:
-    "link": true
-
-    Therefore we query the individual file endpoint.
-    -------------------------------------------------------
-    */
-
     if (
       !file.link
     ) {
@@ -2416,13 +2364,6 @@ async function loadFolder(
     }
 
 
-    /*
-    -------------------------------------------------------
-    If metadata already exists in folder response,
-    keep it. Otherwise individual endpoint filled it.
-    -------------------------------------------------------
-    */
-
     if (
       file.link
     ) {
@@ -2441,12 +2382,6 @@ async function loadFolder(
 
   }
 
-
-  /*
-  -------------------------------------------------------
-  SORT
-  -------------------------------------------------------
-  */
 
   const sortedFiles =
     sortFiles(
@@ -2482,6 +2417,457 @@ async function loadFolder(
 
 /*
 =========================================================
+ CONFIGURATION PAGE
+=========================================================
+*/
+
+function configurationPage() {
+
+  return `<!DOCTYPE html>
+<html lang="pt">
+<head>
+
+<meta charset="UTF-8">
+
+<meta
+  name="viewport"
+  content="width=device-width, initial-scale=1.0"
+>
+
+<title>GoFile → Stremio</title>
+
+<style>
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+
+  margin: 0;
+
+  padding: 40px 20px;
+
+  background: #111;
+
+  color: #fff;
+
+  font-family:
+    Arial,
+    Helvetica,
+    sans-serif;
+
+}
+
+.container {
+
+  max-width: 600px;
+
+  margin: 0 auto;
+
+  background: #1d1d1d;
+
+  border-radius: 14px;
+
+  padding: 30px;
+
+  box-shadow:
+    0 10px 40px
+    rgba(0,0,0,.4);
+
+}
+
+h1 {
+
+  margin-top: 0;
+
+  font-size: 28px;
+
+}
+
+p {
+
+  color: #bbb;
+
+  line-height: 1.5;
+
+}
+
+label {
+
+  display: block;
+
+  margin-top: 25px;
+
+  margin-bottom: 8px;
+
+  font-weight: bold;
+
+}
+
+input {
+
+  width: 100%;
+
+  padding: 14px;
+
+  border-radius: 8px;
+
+  border: 1px solid #444;
+
+  background: #111;
+
+  color: #fff;
+
+  font-size: 16px;
+
+}
+
+button {
+
+  width: 100%;
+
+  margin-top: 18px;
+
+  padding: 14px;
+
+  border: 0;
+
+  border-radius: 8px;
+
+  background: #7b3ff2;
+
+  color: #fff;
+
+  font-size: 16px;
+
+  font-weight: bold;
+
+  cursor: pointer;
+
+}
+
+button:hover {
+
+  background: #8d58f5;
+
+}
+
+button:disabled {
+
+  opacity: .5;
+
+  cursor: wait;
+
+}
+
+#result {
+
+  margin-top: 20px;
+
+  padding: 15px;
+
+  border-radius: 8px;
+
+  display: none;
+
+}
+
+.success {
+
+  background: #173d24;
+
+  color: #7dff9d;
+
+}
+
+.error {
+
+  background: #421d1d;
+
+  color: #ff8c8c;
+
+}
+
+.install {
+
+  background: #e67e22;
+
+}
+
+.install:hover {
+
+  background: #f39c12;
+
+}
+
+.small {
+
+  font-size: 13px;
+
+  color: #888;
+
+}
+
+</style>
+
+</head>
+
+<body>
+
+<div class="container">
+
+<h1>
+  GoFile → Stremio
+</h1>
+
+<p>
+  Escolhe a pasta GoFile que queres utilizar no addon.
+</p>
+
+<label for="folder">
+  ID ou URL da pasta GoFile
+</label>
+
+<input
+  id="folder"
+  type="text"
+  placeholder="Ex: Hg4qUe ou https://gofile.io/d/Hg4qUe"
+/>
+
+<button
+  id="verify"
+  onclick="verifyFolder()"
+>
+  Verificar pasta
+</button>
+
+<div id="result"></div>
+
+</div>
+
+<script>
+
+let selectedFolder = null;
+
+
+function extractFolderId(value) {
+
+  value =
+    value.trim();
+
+
+  if (!value) {
+
+    return null;
+
+  }
+
+
+  const match =
+    value.match(
+      /gofile\\.io\\/d\\/([^/?#]+)/i
+    );
+
+
+  if (match) {
+
+    return match[1];
+
+  }
+
+
+  if (
+    /^[A-Za-z0-9_-]+$/.test(value)
+  ) {
+
+    return value;
+
+  }
+
+
+  return null;
+
+}
+
+
+async function verifyFolder() {
+
+  const input =
+    document.getElementById(
+      "folder"
+    );
+
+  const button =
+    document.getElementById(
+      "verify"
+    );
+
+  const result =
+    document.getElementById(
+      "result"
+    );
+
+
+  const folderId =
+    extractFolderId(
+      input.value
+    );
+
+
+  if (!folderId) {
+
+    result.className =
+      "error";
+
+    result.style.display =
+      "block";
+
+    result.innerHTML =
+      "Introduz um ID ou URL GoFile válido.";
+
+    return;
+
+  }
+
+
+  button.disabled =
+    true;
+
+  button.innerText =
+    "A verificar...";
+
+
+  result.style.display =
+    "block";
+
+  result.className =
+    "";
+
+  result.innerHTML =
+    "A contactar o GoFile...";
+
+
+  try {
+
+    const response =
+      await fetch(
+        "/api/check-folder?id=" +
+        encodeURIComponent(
+          folderId
+        )
+      );
+
+
+    const data =
+      await response.json();
+
+
+    if (
+      !response.ok ||
+      !data.ok
+    ) {
+
+      throw new Error(
+        data.error ||
+        "Não foi possível verificar a pasta."
+      );
+
+    }
+
+
+    selectedFolder =
+      data.folderId;
+
+
+    result.className =
+      "success";
+
+
+    result.innerHTML =
+      "<strong>✓ Pasta encontrada</strong>" +
+      "<br><br>" +
+      "ID: " +
+      data.folderId +
+      "<br>" +
+      "Vídeos encontrados: " +
+      data.videoCount +
+      "<br><br>" +
+      "<button " +
+      "class='install' " +
+      "onclick='installAddon()'>" +
+      "Instalar addon no Stremio" +
+      "</button>";
+
+  } catch (error) {
+
+    selectedFolder =
+      null;
+
+
+    result.className =
+      "error";
+
+
+    result.innerHTML =
+      "<strong>Erro:</strong> " +
+      error.message;
+
+  } finally {
+
+    button.disabled =
+      false;
+
+    button.innerText =
+      "Verificar pasta";
+
+  }
+
+}
+
+
+function installAddon() {
+
+  if (
+    !selectedFolder
+  ) {
+
+    return;
+
+  }
+
+
+  const manifestUrl =
+    window.location.origin +
+    "/manifest.json?folder=" +
+    encodeURIComponent(
+      selectedFolder
+    );
+
+
+  const stremioUrl =
+    "stremio://" +
+    manifestUrl.replace(
+      /^https?:\\/\\//,
+      ""
+    );
+
+
+  window.location.href =
+    stremioUrl;
+
+}
+
+</script>
+
+</body>
+</html>`;
+
+}
+
+
+/*
+=========================================================
  MANIFEST
 =========================================================
 */
@@ -2492,7 +2878,7 @@ const manifest = {
     "com.andre.gofile",
 
   version:
-    "1.2.0",
+    "1.3.0",
 
   name:
     "GoFile Vídeos CL",
@@ -2542,7 +2928,7 @@ const manifest = {
       true,
 
     configurationRequired:
-      false
+      true
 
   }
 
@@ -3199,23 +3585,6 @@ async function proxyVideo(
 =========================================================
  THUMBNAIL PROXY
 =========================================================
-
-O thumbnail do GoFile também pode exigir o
-accountToken.
-
-Por isso o Stremio nunca recebe diretamente
-o URL do GoFile.
-
-Stremio
-   ↓
-/thumbnail/ID
-   ↓
-Render
-   ↓
-GoFile + accountToken
-   ↓
-thumbnail
-=========================================================
 */
 
 async function proxyThumbnail(
@@ -3378,12 +3747,6 @@ async function proxyThumbnail(
 
           }
 
-
-          /*
-          -------------------------------------------------
-          Cache thumbnail no Stremio
-          -------------------------------------------------
-          */
 
           if (
             !res.getHeader(
@@ -3584,6 +3947,186 @@ const server =
 
 
         /*
+        ===================================================
+        CONFIGURATION PAGE
+        ===================================================
+        */
+
+        if (
+          pathname ===
+          "/configure"
+        ) {
+
+          res.statusCode =
+            200;
+
+          res.setHeader(
+            "Content-Type",
+            "text/html; charset=utf-8"
+          );
+
+          return res.end(
+            configurationPage()
+          );
+
+        }
+
+
+        /*
+        ===================================================
+        CHECK GOFILE FOLDER
+        ===================================================
+        */
+
+        if (
+          pathname ===
+          "/api/check-folder"
+        ) {
+
+          const requestedFolder =
+            parsed.searchParams.get(
+              "id"
+            );
+
+
+          if (
+            !requestedFolder
+          ) {
+
+            return sendJson(
+              res,
+              {
+
+                ok:
+                  false,
+
+                error:
+                  "Folder ID não fornecido."
+
+              },
+              400
+            );
+
+          }
+
+
+          const previousFolder =
+            GOFILE_FOLDER;
+
+
+          try {
+
+            console.log(
+              `[Config] Verifying GoFile folder: ${requestedFolder}`
+            );
+
+
+            /*
+            -------------------------------------------------
+            Temporariamente selecionamos a pasta pedida.
+            loadFolder(true) usa exatamente a mesma lógica
+            de autenticação que já funciona no addon.
+            -------------------------------------------------
+            */
+
+            GOFILE_FOLDER =
+              requestedFolder;
+
+
+            folderCache = {
+
+              timestamp:
+                0,
+
+              files:
+                []
+
+            };
+
+
+            const files =
+              await loadFolder(
+                true
+              );
+
+
+            console.log(
+              `[Config] Folder selected: ${GOFILE_FOLDER}`
+            );
+
+
+            return sendJson(
+              res,
+              {
+
+                ok:
+                  true,
+
+                folderId:
+                  GOFILE_FOLDER,
+
+                folderUrl:
+                  `${GOFILE_WEB}/d/${GOFILE_FOLDER}`,
+
+                videoCount:
+                  files.length
+
+              }
+            );
+
+
+          } catch (error) {
+
+            /*
+            -------------------------------------------------
+            Se a verificação falhar, voltamos à pasta
+            anterior para não deixar o addon num estado
+            inválido.
+            -------------------------------------------------
+            */
+
+            GOFILE_FOLDER =
+              previousFolder;
+
+
+            folderCache = {
+
+              timestamp:
+                0,
+
+              files:
+                []
+
+            };
+
+
+            console.error(
+              "[Config] Folder verification failed:",
+              error
+            );
+
+
+            return sendJson(
+              res,
+              {
+
+                ok:
+                  false,
+
+                error:
+                  error.message ||
+                  "Erro ao verificar a pasta."
+
+              },
+              500
+            );
+
+          }
+
+        }
+
+
+        /*
         ---------------------------------------------------
         MANIFEST
         ---------------------------------------------------
@@ -3593,6 +4136,48 @@ const server =
           pathname ===
           "/manifest.json"
         ) {
+
+          const requestedFolder =
+            parsed.searchParams.get(
+              "folder"
+            );
+
+
+          /*
+          -------------------------------------------------
+          Quando o Stremio instala:
+
+          /manifest.json?folder=Hg4qUe
+
+          a pasta passa a ser a pasta global do addon.
+          -------------------------------------------------
+          */
+
+          if (
+            requestedFolder
+          ) {
+
+            console.log(
+              `[Manifest] Selected folder: ${requestedFolder}`
+            );
+
+
+            GOFILE_FOLDER =
+              requestedFolder;
+
+
+            folderCache = {
+
+              timestamp:
+                0,
+
+              files:
+                []
+
+            };
+
+          }
+
 
           return sendJson(
             res,
@@ -3892,7 +4477,6 @@ const server =
                 file,
                 index
               ) => {
-
 
                 let poster =
                   null;
@@ -4334,6 +4918,9 @@ const server =
               sort:
                 GOFILE_SORT,
 
+              configure:
+                "/configure",
+
               manifest:
                 "/manifest.json",
 
@@ -4445,6 +5032,10 @@ server.listen(
 
     console.log(
       "Video proxy enabled"
+    );
+
+    console.log(
+      "Configuration page enabled"
     );
 
     console.log(

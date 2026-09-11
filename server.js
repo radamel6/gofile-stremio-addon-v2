@@ -9,12 +9,13 @@ const { URL } = require("url");
  GOFILE → STREMIO ADDON
 =========================================================
 
-Para mudar de pasta GoFile:
-
-Render Environment Variable:
+Para uma única pasta (modo antigo):
 GOFILE_FOLDER=Hg4qUe
 
-Exemplo:
+Para várias pastas (recomendado):
+GOFILE_FOLDERS=Futebol:Hg4qUe,Filmes:abc123,Séries:def456
+
+Exemplo de URL:
 https://gofile.io/d/Hg4qUe
                      ^^^^^^
 
@@ -31,7 +32,34 @@ const PORT =
   Number(process.env.PORT || 10000);
 
 const GOFILE_FOLDER =
-  process.env.GOFILE_FOLDER || "xOZ1Mzd3";
+  process.env.GOFILE_FOLDER || "Hg4qUe";
+
+/*
+=========================================================
+ DEFAULT / FALLBACK FOLDER
+=========================================================
+
+The environment variable is kept only as a fallback.
+When the addon is configured in Stremio, the folder ID
+comes from the addon URL and overrides this value.
+=========================================================
+*/
+
+const FOLDERS = [
+  {
+    name: "GoFile Videos",
+    id: GOFILE_FOLDER,
+    catalogId: "gofile-videos"
+  }
+];
+
+const FOLDER_BY_CATALOG =
+  new Map(
+    FOLDERS.map(folder => [
+      folder.catalogId,
+      folder
+    ])
+  );
 
 const GOFILE_SORT =
   process.env.GOFILE_SORT || "name_asc";
@@ -65,17 +93,13 @@ const WT_SECRET_CACHE_TIME =
 const REQUEST_TIMEOUT =
   30000;
 
-
 /*
 =========================================================
  GLOBAL CACHE
 =========================================================
 */
 
-let folderCache = {
-  timestamp: 0,
-  files: []
-};
+const folderCache = new Map();
 
 let guestAccountCache = {
   token: null,
@@ -90,7 +114,6 @@ let websiteTokenSecretCache = {
 
 let websiteTokenSecretPromise = null;
 
-
 /*
 =========================================================
  HTTP REQUEST
@@ -102,75 +125,51 @@ function request(
   targetUrl,
   options = {}
 ) {
-
   return new Promise(
     (resolve, reject) => {
-
       let url;
 
       try {
-
         url =
           new URL(targetUrl);
-
       } catch (error) {
-
         reject(error);
         return;
-
       }
 
       const headers = {
-
         "User-Agent":
           USER_AGENT,
-
         "Accept-Language":
           LANGUAGE,
-
         "Accept":
           "application/json, text/plain, */*",
-
         "Connection":
           "close",
-
         ...(options.headers || {})
-
       };
-
 
       const req =
         https.request(
           {
-
             protocol:
               url.protocol,
-
             hostname:
               url.hostname,
-
             port:
               url.port || 443,
-
             path:
               url.pathname +
               url.search,
-
             method,
-
             headers,
-
             family:
               4,
-
             timeout:
               options.timeout ||
               REQUEST_TIMEOUT
-
           },
-
           res => {
-
             let body = "";
 
             res.setEncoding(
@@ -187,30 +186,21 @@ function request(
             res.on(
               "end",
               () => {
-
                 resolve({
-
                   status:
                     res.statusCode || 0,
-
                   headers:
                     res.headers || {},
-
                   body
-
                 });
-
               }
             );
-
           }
         );
-
 
       req.on(
         "timeout",
         () => {
-
           req.destroy(
             new Error(
               `Request timeout after ${
@@ -219,35 +209,26 @@ function request(
               }ms`
             )
           );
-
         }
       );
-
 
       req.on(
         "error",
         reject
       );
 
-
       if (
         options.body
       ) {
-
         req.write(
           options.body
         );
-
       }
 
-
       req.end();
-
     }
   );
-
 }
-
 
 /*
 =========================================================
@@ -257,45 +238,32 @@ function request(
 
 async function jsonRequest(
   method,
-  url,
+  targetUrl,
   options = {}
 ) {
-
   const response =
     await request(
       method,
-      url,
+      targetUrl,
       options
     );
 
-
   let data = null;
 
-
   try {
-
     data =
       JSON.parse(
         response.body
       );
-
   } catch (_) {
-
     data = null;
-
   }
 
-
   return {
-
     ...response,
-
     data
-
   };
-
 }
-
 
 /*
 =========================================================
@@ -303,8 +271,9 @@ async function jsonRequest(
 =========================================================
 */
 
-function sleep(ms) {
-
+function sleep(
+  ms
+) {
   return new Promise(
     resolve =>
       setTimeout(
@@ -312,1378 +281,673 @@ function sleep(ms) {
         ms
       )
   );
-
 }
-
 
 /*
 =========================================================
- GOFILE ACCOUNT
+ CREATE GOFILE GUEST ACCOUNT
 =========================================================
 */
 
 async function createAccount(
   force = false
 ) {
-
   const now =
     Date.now();
-
 
   if (
     !force &&
     guestAccountCache.token &&
     now -
-      guestAccountCache.timestamp
-      <
+      guestAccountCache.timestamp <
       ACCOUNT_CACHE_TIME
   ) {
-
-    return {
-      token:
-        guestAccountCache.token
-    };
-
+    return guestAccountCache.token;
   }
 
-
-  console.log(
-    "[GoFile] Creating guest account..."
-  );
-
-
-  let response =
+  const response =
     await jsonRequest(
       "POST",
       `${GOFILE_API}/accounts`,
       {
-
         headers: {
-
           "Content-Type":
             "application/json",
-
           "Origin":
             GOFILE_WEB,
-
           "Referer":
             `${GOFILE_WEB}/`
-
         },
-
         body:
           JSON.stringify({})
-
       }
     );
-
-
-  /*
-  -------------------------------------------------------
-  If GoFile requires WT
-  -------------------------------------------------------
-  */
-
-  if (
-    !response.data ||
-    response.data.status !== "ok" ||
-    !response.data.data ||
-    !response.data.data.token
-  ) {
-
-    try {
-
-      const wt =
-        await generateWebsiteToken("");
-
-      console.log(
-        "[GoFile] Retrying account creation with WT"
-      );
-
-
-      response =
-        await jsonRequest(
-          "POST",
-          `${GOFILE_API}/accounts`,
-          {
-
-            headers: {
-
-              "Content-Type":
-                "application/json",
-
-              "Origin":
-                GOFILE_WEB,
-
-              "Referer":
-                `${GOFILE_WEB}/`,
-
-              "X-Website-Token":
-                wt,
-
-              "X-BL":
-                LANGUAGE
-
-            },
-
-            body:
-              JSON.stringify({})
-
-          }
-        );
-
-
-    } catch (error) {
-
-      console.log(
-        "[GoFile] WT account retry failed:",
-        error.message
-      );
-
-    }
-
-  }
-
-
-  if (
-    !response.data
-  ) {
-
-    throw new Error(
-      `GoFile account returned HTTP ${
-        response.status
-      }: ${
-        response.body.slice(
-          0,
-          1000
-        )
-      }`
-    );
-
-  }
-
-
-  if (
-    response.data.status !== "ok" ||
-    !response.data.data ||
-    !response.data.data.token
-  ) {
-
-    throw new Error(
-      `GoFile account error: ${
-        JSON.stringify(
-          response.data
-        )
-      }`
-    );
-
-  }
-
-
-  const token =
-    response.data.data.token;
-
-
-  guestAccountCache = {
-
-    token,
-
-    timestamp:
-      Date.now()
-
-  };
-
-
-  console.log(
-    "[GoFile] Guest account created"
-  );
-
-
-  return {
-
-    token,
-
-    raw:
-      response.data
-
-  };
-
-}
-
-
-/*
-=========================================================
- DISCOVER WT SCRIPT
-=========================================================
-*/
-
-async function discoverWebsiteTokenScript() {
-
-  const knownUrls = [
-
-    `${GOFILE_WEB}/js/wt.obf.js`,
-
-    `${GOFILE_WEB}/dist/js/wt.obf.js`,
-
-    `${GOFILE_WEB}/dist/js/wt.js`
-
-  ];
-
-
-  try {
-
-    console.log(
-      "[GoFile] Inspecting homepage for WT script..."
-    );
-
-
-    const page =
-      await request(
-        "GET",
-        `${GOFILE_WEB}/`,
-        {
-
-          headers: {
-
-            "Accept":
-              "text/html,application/xhtml+xml," +
-              "application/xml;q=0.9,*/*;q=0.8",
-
-            "Referer":
-              `${GOFILE_WEB}/`
-
-          },
-
-          timeout:
-            20000
-
-        }
-      );
-
-
-    if (
-      page.status >= 200 &&
-      page.status < 300 &&
-      page.body
-    ) {
-
-      const html =
-        page.body;
-
-
-      const scriptRegex =
-        /<script[^>]+src=["']([^"']*wt[^"']*\.js(?:\?[^"']*)?)["'][^>]*>/gi;
-
-
-      let match;
-
-
-      while (
-        (match =
-          scriptRegex.exec(html))
-      ) {
-
-        let src =
-          match[1];
-
-
-        if (
-          !src
-        ) {
-
-          continue;
-
-        }
-
-
-        try {
-
-          const absolute =
-            new URL(
-              src,
-              GOFILE_WEB
-            ).toString();
-
-
-          console.log(
-            `[GoFile] WT script discovered: ${absolute}`
-          );
-
-
-          return absolute;
-
-        } catch (_) {}
-
-      }
-
-
-      const looseRegex =
-        /["']([^"']*wt[^"']*\.js(?:\?[^"']*)?)["']/gi;
-
-
-      while (
-        (match =
-          looseRegex.exec(html))
-      ) {
-
-        let src =
-          match[1];
-
-
-        if (
-          !src ||
-          !src.includes("wt")
-        ) {
-
-          continue;
-
-        }
-
-
-        try {
-
-          const absolute =
-            new URL(
-              src,
-              GOFILE_WEB
-            ).toString();
-
-
-          console.log(
-            `[GoFile] WT script found (loose): ${absolute}`
-          );
-
-
-          return absolute;
-
-        } catch (_) {}
-
-      }
-
-    }
-
-  } catch (error) {
-
-    console.log(
-      "[GoFile] Homepage discovery failed:",
-      error.message
-    );
-
-  }
-
-
-  for (
-    const url of knownUrls
-  ) {
-
-    try {
-
-      console.log(
-        `[GoFile] Testing WT script: ${url}`
-      );
-
-
-      const response =
-        await request(
-          "GET",
-          url,
-          {
-
-            headers: {
-
-              "Accept":
-                "application/javascript," +
-                "text/javascript,*/*;q=0.8",
-
-              "Referer":
-                `${GOFILE_WEB}/`
-
-            },
-
-            timeout:
-              20000
-
-          }
-        );
-
-
-      if (
-        response.status >= 200 &&
-        response.status < 300 &&
-        response.body &&
-        response.body.length > 100
-      ) {
-
-        console.log(
-          `[GoFile] WT script available: ${url}`
-        );
-
-
-        return {
-
-          url,
-
-          body:
-            response.body
-
-        };
-
-      }
-
-
-      console.log(
-        `[GoFile] WT script ${url} -> HTTP ${
-          response.status
-        }`
-      );
-
-
-    } catch (error) {
-
-      console.log(
-        `[GoFile] WT script failed ${url}: ${
-          error.message
-        }`
-      );
-
-    }
-
-  }
-
-
-  return null;
-
-}
-
-
-/*
-=========================================================
- EXTRACT WT SECRET
-=========================================================
-*/
-
-function extractWebsiteTokenSecret(
-  script
-) {
-
-  let rawHashInput;
-
-
-  const probeUserAgent =
-    "HydraGofileUserAgent";
-
-  const probeLanguage =
-    "HydraGofileLanguage";
-
-  const probeToken =
-    "HydraGofileToken";
-
-
-  const navigator = {
-
-    userAgent:
-      probeUserAgent,
-
-    language:
-      probeLanguage,
-
-    languages: [
-      probeLanguage
-    ]
-
-  };
-
-
-  const contextObject = {
-
-    appdata: {},
-
-    console: {
-
-      log: () => {},
-      warn: () => {},
-      error: () => {}
-
-    },
-
-    crypto:
-      crypto.webcrypto,
-
-    Date,
-
-    Math,
-
-    URL,
-
-    URLSearchParams,
-
-    TextEncoder,
-
-    TextDecoder,
-
-    setTimeout,
-
-    clearTimeout,
-
-    navigator,
-
-    window: {
-
-      crypto:
-        crypto.webcrypto,
-
-      navigator,
-
-      location: {
-
-        hostname:
-          "gofile.io",
-
-        href:
-          "https://gofile.io/",
-
-        search:
-          ""
-
-      }
-
-    }
-
-  };
-
-
-  const context =
-    vm.createContext(
-      contextObject,
-      {
-        name:
-          "gofile-website-token"
-      }
-    );
-
-
-  try {
-
-    vm.runInContext(
-      script,
-      context,
-      {
-        timeout:
-          3000
-      }
-    );
-
-  } catch (error) {
-
-    throw new Error(
-      `Unable to execute wt.obf.js: ${
-        error.message
-      }`
-    );
-
-  }
-
-
-  if (
-    typeof context.generateWT !==
-    "function"
-  ) {
-
-    throw new Error(
-      "generateWT function was not found in wt.obf.js"
-    );
-
-  }
-
-
-  context._sha256 = (
-    input
-  ) => {
-
-    rawHashInput =
-      String(input);
-
-    return "0".repeat(64);
-
-  };
-
-
-  try {
-
-    vm.runInContext(
-      `generateWT(${JSON.stringify(
-        probeToken
-      )})`,
-      context,
-      {
-        timeout:
-          3000
-      }
-    );
-
-  } catch (error) {
-
-    throw new Error(
-      `generateWT execution failed: ${
-        error.message
-      }`
-    );
-
-  }
-
-
-  if (
-    !rawHashInput
-  ) {
-
-    throw new Error(
-      "generateWT did not call _sha256"
-    );
-
-  }
-
-
-  const expectedPrefix =
-    `${probeUserAgent}::` +
-    `${probeLanguage}::` +
-    `${probeToken}::`;
-
-
-  if (
-    !rawHashInput.startsWith(
-      expectedPrefix
-    )
-  ) {
-
-    throw new Error(
-      "Unexpected GoFile WT format: " +
-      rawHashInput.slice(
-        0,
-        250
-      )
-    );
-
-  }
-
-
-  const remainder =
-    rawHashInput.slice(
-      expectedPrefix.length
-    );
-
-
-  const parts =
-    remainder.split("::");
-
-
-  if (
-    parts.length < 2
-  ) {
-
-    throw new Error(
-      "Unable to extract WT secret"
-    );
-
-  }
-
-
-  const secret =
-    parts
-      .slice(1)
-      .join("::")
-      .trim();
-
-
-  if (
-    !secret
-  ) {
-
-    throw new Error(
-      "GoFile WT secret is empty"
-    );
-
-  }
-
-
-  console.log(
-    `[GoFile] WT secret extracted (${secret.length} chars)`
-  );
-
-
-  return secret;
-
-}
-
-
-/*
-=========================================================
- GET WT SECRET
-=========================================================
-*/
-
-async function getWebsiteTokenSecret() {
-
-  const now =
-    Date.now();
-
-
-  if (
-    websiteTokenSecretCache.secret &&
-    now -
-      websiteTokenSecretCache.timestamp
-      <
-      WT_SECRET_CACHE_TIME
-  ) {
-
-    return {
-
-      secret:
-        websiteTokenSecretCache.secret,
-
-      scriptUrl:
-        websiteTokenSecretCache.scriptUrl
-
-    };
-
-  }
-
-
-  if (
-    websiteTokenSecretPromise
-  ) {
-
-    return websiteTokenSecretPromise;
-
-  }
-
-
-  websiteTokenSecretPromise =
-    (async () => {
-
-      const discovered =
-        await discoverWebsiteTokenScript();
-
-
-      if (
-        !discovered
-      ) {
-
-        throw new Error(
-          "Unable to obtain Gofile wt.obf.js"
-        );
-
-      }
-
-
-      let scriptUrl;
-      let script;
-
-
-      if (
-        typeof discovered ===
-        "object"
-      ) {
-
-        scriptUrl =
-          discovered.url;
-
-        script =
-          discovered.body;
-
-      } else {
-
-        scriptUrl =
-          discovered;
-
-
-        const response =
-          await request(
-            "GET",
-            scriptUrl,
-            {
-
-              headers: {
-
-                "Accept":
-                  "application/javascript," +
-                  "text/javascript,*/*;q=0.8",
-
-                "Referer":
-                  `${GOFILE_WEB}/`
-
-              },
-
-              timeout:
-                20000
-
-            }
-          );
-
-
-        if (
-          response.status < 200 ||
-          response.status >= 300
-        ) {
-
-          throw new Error(
-            `WT script HTTP ${
-              response.status
-            }`
-          );
-
-        }
-
-
-        script =
-          response.body;
-
-      }
-
-
-      if (
-        !script ||
-        script.length < 100
-      ) {
-
-        throw new Error(
-          "WT script was empty or invalid"
-        );
-
-      }
-
-
-      console.log(
-        `[GoFile] Executing WT script: ${scriptUrl}`
-      );
-
-
-      const secret =
-        extractWebsiteTokenSecret(
-          script
-        );
-
-
-      websiteTokenSecretCache = {
-
-        secret,
-
-        scriptUrl,
-
-        timestamp:
-          Date.now()
-
-      };
-
-
-      return {
-
-        secret,
-
-        scriptUrl
-
-      };
-
-    })()
-      .finally(() => {
-
-        websiteTokenSecretPromise =
-          null;
-
-      });
-
-
-  return websiteTokenSecretPromise;
-
-}
-
-
-/*
-=========================================================
- GENERATE WEBSITE TOKEN
-=========================================================
-*/
-
-async function generateWebsiteToken(
-  accountToken
-) {
-
-  const wt =
-    await getWebsiteTokenSecret();
-
-
-  const timeWindow =
-    Math.floor(
-      Date.now() /
-      1000 /
-      14400
-    );
-
-
-  const raw =
-    `${USER_AGENT}::` +
-    `${LANGUAGE}::` +
-    `${accountToken}::` +
-    `${timeWindow}::` +
-    `${wt.secret}`;
-
-
-  const token =
-    crypto
-      .createHash("sha256")
-      .update(raw)
-      .digest("hex");
-
-
-  return {
-
-    token,
-
-    scriptUrl:
-      wt.scriptUrl,
-
-    timeWindow
-
-  };
-
-}
-
-
-/*
-=========================================================
- GOFILE CONTENTS
-=========================================================
-*/
-
-async function getContents(
-  folderId,
-  accountToken,
-  websiteToken
-) {
-
-  const params =
-    new URLSearchParams({
-
-      page:
-        "1",
-
-      pageSize:
-        "1000",
-
-      sortField:
-        "name",
-
-      sortDirection:
-        "1"
-
-    });
-
-
-  const url =
-    `${GOFILE_API}/contents/` +
-    `${encodeURIComponent(folderId)}` +
-    `?${params.toString()}`;
-
-
-  const response =
-    await jsonRequest(
-      "GET",
-      url,
-      {
-
-        headers: {
-
-          "Authorization":
-            `Bearer ${accountToken}`,
-
-          "X-Website-Token":
-            websiteToken,
-
-          "X-BL":
-            LANGUAGE,
-
-          "User-Agent":
-            USER_AGENT,
-
-          "Accept":
-            "application/json",
-
-          "Referer":
-            `${GOFILE_WEB}/d/${folderId}`,
-
-          "Origin":
-            GOFILE_WEB
-
-        },
-
-        timeout:
-          REQUEST_TIMEOUT
-
-      }
-    );
-
 
   if (
     response.data &&
     response.data.status ===
-      "ok"
+      "ok" &&
+    response.data.data &&
+    response.data.data.token
   ) {
+    guestAccountCache = {
+      token:
+        response.data.data.token,
+      timestamp:
+        now
+    };
 
-    return response.data;
-
+    return (
+      response.data.data.token
+    );
   }
 
-
-  throw new GoFileApiError(
-
-    response.data
-      ? (
-        response.data.status ||
-        "unknown"
-      )
-      : "http-error",
-
-    response.status,
-
-    response.data ||
-      response.body
-
+  throw new Error(
+    `Falha ao criar conta GoFile: HTTP ${
+      response.status
+    } ${response.body}`
   );
-
 }
-
 
 /*
 =========================================================
- CUSTOM GOFILE ERROR
+ STRING / SCRIPT HELPERS
 =========================================================
 */
 
-class GoFileApiError
-  extends Error {
+function normalizeText(
+  value
+) {
+  return String(
+    value == null
+      ? ""
+      : value
+  );
+}
 
-  constructor(
-    status,
-    httpStatus,
-    data
+function decodeEscapedString(
+  value
+) {
+  return String(value)
+    .replace(
+      /\\x([0-9a-fA-F]{2})/g,
+      (_, hex) =>
+        String.fromCharCode(
+          parseInt(
+            hex,
+            16
+          )
+        )
+    )
+    .replace(
+      /\\u([0-9a-fA-F]{4})/g,
+      (_, hex) =>
+        String.fromCharCode(
+          parseInt(
+            hex,
+            16
+          )
+        )
+    );
+}
+
+/*
+=========================================================
+ WEBSITE TOKEN / WT.OBF.JS
+=========================================================
+*/
+
+async function getWebsiteTokenSecret(
+  force = false
+) {
+  const now =
+    Date.now();
+
+  if (
+    !force &&
+    websiteTokenSecretCache.secret &&
+    now -
+      websiteTokenSecretCache.timestamp <
+      WT_SECRET_CACHE_TIME
   ) {
+    return (
+      websiteTokenSecretCache
+    );
+  }
 
-    super(
-      `GoFile API error: ${
-        JSON.stringify({
-          status,
-          httpStatus,
-          data
-        })
-      }`
+  if (
+    websiteTokenSecretPromise &&
+    !force
+  ) {
+    return (
+      websiteTokenSecretPromise
+    );
+  }
+
+  websiteTokenSecretPromise =
+    (async () => {
+      const page =
+        await request(
+          "GET",
+          `${GOFILE_WEB}/`
+        );
+
+      const html =
+        page.body || "";
+
+      const scriptMatches =
+        html.match(
+          /<script[^>]+src=["']([^"']+)["'][^>]*>/gi
+        ) || [];
+
+      let scriptUrls =
+        scriptMatches.map(
+          tag => {
+            const match =
+              tag.match(
+                /src=["']([^"']+)["']/i
+              );
+
+            if (!match) {
+              return null;
+            }
+
+            try {
+              return new URL(
+                match[1],
+                GOFILE_WEB
+              ).toString();
+            } catch (_) {
+              return null;
+            }
+          }
+        )
+        .filter(Boolean);
+
+      scriptUrls =
+        scriptUrls.filter(
+          url =>
+            /wt\.obf\.js/i.test(
+              url
+            ) ||
+            /obf/i.test(
+              url
+            )
+        );
+
+      if (
+        scriptUrls.length ===
+        0
+      ) {
+        const allScripts =
+          scriptMatches.map(
+            tag => {
+              const match =
+                tag.match(
+                  /src=["']([^"']+)["']/i
+                );
+
+              return match
+                ? match[1]
+                : null;
+            }
+          )
+          .filter(Boolean);
+
+        scriptUrls =
+          allScripts.map(
+            src => {
+              try {
+                return new URL(
+                  src,
+                  GOFILE_WEB
+                ).toString();
+              } catch (_) {
+                return null;
+              }
+            }
+          )
+          .filter(Boolean);
+      }
+
+      let secret =
+        null;
+
+      let selectedScript =
+        null;
+
+      for (
+        const scriptUrl of scriptUrls
+      ) {
+        try {
+          const response =
+            await request(
+              "GET",
+              scriptUrl
+            );
+
+          const script =
+            response.body || "";
+
+          const candidates = [
+            script.match(
+              /secret\s*=\s*["']([^"']+)["']/i
+            ),
+            script.match(
+              /SECRET\s*=\s*["']([^"']+)["']/i
+            ),
+            script.match(
+              /secret\s*:\s*["']([^"']+)["']/i
+            ),
+            script.match(
+              /["']secret["']\s*:\s*["']([^"']+)["']/i
+            ),
+            script.match(
+              /wtSecret\s*=\s*["']([^"']+)["']/i
+            ),
+            script.match(
+              /WT_SECRET\s*=\s*["']([^"']+)["']/i
+            )
+          ];
+
+          for (
+            const candidate of candidates
+          ) {
+            if (
+              candidate &&
+              candidate[1]
+            ) {
+              secret =
+                decodeEscapedString(
+                  candidate[1]
+                );
+
+              selectedScript =
+                scriptUrl;
+
+              break;
+            }
+          }
+
+          if (
+            secret
+          ) {
+            break;
+          }
+
+          /*
+          -------------------------------------------------
+          Try to execute script in isolated VM
+          -------------------------------------------------
+          */
+
+          const context = {
+            window: {},
+            globalThis: {},
+            self: {},
+            document: {},
+            location: {
+              href:
+                GOFILE_WEB
+            },
+            console: {
+              log() {},
+              warn() {},
+              error() {}
+            }
+          };
+
+          vm.createContext(
+            context
+          );
+
+          try {
+            vm.runInContext(
+              script,
+              context,
+              {
+                timeout:
+                  5000
+              }
+            );
+          } catch (_) {
+            // Expected for some browser-only scripts.
+          }
+
+          const objects = [
+            context,
+            context.window,
+            context.globalThis,
+            context.self
+          ];
+
+          for (
+            const object of objects
+          ) {
+            if (
+              !object
+            ) {
+              continue;
+            }
+
+            const keys =
+              Object.keys(
+                object
+              );
+
+            for (
+              const key of keys
+            ) {
+              const value =
+                object[key];
+
+              if (
+                typeof value ===
+                  "string" &&
+                value.length >
+                  10 &&
+                /secret|token|wt/i.test(
+                  key
+                )
+              ) {
+                secret =
+                  value;
+
+                selectedScript =
+                  scriptUrl;
+
+                break;
+              }
+            }
+
+            if (
+              secret
+            ) {
+              break;
+            }
+          }
+
+          if (
+            secret
+          ) {
+            break;
+          }
+        } catch (_) {
+          continue;
+        }
+      }
+
+      /*
+      -----------------------------------------------------
+      Fallback extraction directly from page
+      -----------------------------------------------------
+      */
+
+      if (
+        !secret
+      ) {
+        const candidates = [
+          html.match(
+            /secret\s*[:=]\s*["']([^"']+)["']/i
+          ),
+          html.match(
+            /wtSecret\s*[:=]\s*["']([^"']+)["']/i
+          ),
+          html.match(
+            /WT_SECRET\s*[:=]\s*["']([^"']+)["']/i
+          )
+        ];
+
+        for (
+          const candidate of candidates
+        ) {
+          if (
+            candidate &&
+            candidate[1]
+          ) {
+            secret =
+              decodeEscapedString(
+                candidate[1]
+              );
+
+            break;
+          }
+        }
+      }
+
+      if (
+        !secret
+      ) {
+        throw new Error(
+          "Não foi possível descobrir o secret do Website Token."
+        );
+      }
+
+      websiteTokenSecretCache = {
+        secret,
+        scriptUrl:
+          selectedScript,
+        timestamp:
+          Date.now()
+      };
+
+      return (
+        websiteTokenSecretCache
+      );
+    })();
+
+  try {
+    return (
+      await websiteTokenSecretPromise
+    );
+  } finally {
+    websiteTokenSecretPromise =
+      null;
+  }
+}
+
+/*
+=========================================================
+ WEBSITE TOKEN GENERATION
+=========================================================
+*/
+
+function createWebsiteToken(
+  secret,
+  folderId
+) {
+  const timestamp =
+    Math.floor(
+      Date.now() /
+        1000
     );
 
-    this.name =
-      "GoFileApiError";
+  const payload =
+    `${folderId}:${timestamp}`;
 
-    this.gofileStatus =
-      status;
-
-    this.httpStatus =
-      httpStatus;
-
-    this.data =
-      data;
-
-  }
-
+  return crypto
+    .createHmac(
+      "sha256",
+      secret
+    )
+    .update(
+      payload
+    )
+    .digest("hex");
 }
-
 
 /*
 =========================================================
- LOAD CONTENT WITH RETRIES
+ GET WEBSITE TOKEN
 =========================================================
 */
 
-async function getContentsWithRetry(
+async function getWebsiteToken(
   folderId,
-  accountToken,
-  websiteToken
+  force = false
 ) {
+  const tokenInfo =
+    await getWebsiteTokenSecret(
+      force
+    );
 
-  const maxRetries =
-    4;
+  const token =
+    createWebsiteToken(
+      tokenInfo.secret,
+      folderId
+    );
 
-
-  for (
-    let attempt = 0;
-    attempt <= maxRetries;
-    attempt++
-  ) {
-
-    try {
-
-      return await getContents(
-        folderId,
-        accountToken,
-        websiteToken
-      );
-
-    } catch (error) {
-
-      const retryable =
-        error &&
-        (
-
-          error.gofileStatus ===
-            "error-rateLimit" ||
-
-          error.httpStatus ===
-            429 ||
-
-          error.httpStatus >= 500
-
-        );
-
-
-      if (
-        !retryable ||
-        attempt === maxRetries
-      ) {
-
-        throw error;
-
-      }
-
-
-      const delay =
-        2000 *
-        Math.pow(
-          2,
-          attempt
-        );
-
-
-      console.log(
-        `[GoFile] Rate limit/server error. ` +
-        `Retry ${attempt + 1}/${maxRetries} ` +
-        `in ${delay}ms`
-      );
-
-
-      await sleep(
-        delay
-      );
-
-
-      if (
-        error.gofileStatus ===
-        "error-rateLimit"
-      ) {
-
-        guestAccountCache = {
-
-          token:
-            null,
-
-          timestamp:
-            0
-
-        };
-
-
-        const account =
-          await createAccount(
-            true
-          );
-
-
-        const generated =
-          await generateWebsiteToken(
-            account.token
-          );
-
-
-        accountToken =
-          account.token;
-
-        websiteToken =
-          generated.token;
-
-      }
-
-    }
-
-  }
-
+  return token;
 }
-
 
 /*
 =========================================================
- GET REAL FILE LINK + THUMBNAIL
+ GOFILE API CALL
+=========================================================
+*/
+
+async function gofileApi(
+  path,
+  options = {}
+) {
+  const token =
+    options.token ||
+    await createAccount();
+
+  const separator =
+    path.includes("?")
+      ? "&"
+      : "?";
+
+  const url =
+    `${GOFILE_API}${path}${separator}token=${encodeURIComponent(token)}`;
+
+  return jsonRequest(
+    options.method || "GET",
+    url,
+    {
+      headers: {
+        "Authorization":
+          `Bearer ${token}`,
+        "Origin":
+          GOFILE_WEB,
+        "Referer":
+          `${GOFILE_WEB}/`,
+        ...(options.headers || {})
+      },
+      body:
+        options.body
+    }
+  );
+}
+
+/*
+=========================================================
+ FILE LINK
 =========================================================
 */
 
 async function getFileLink(
-  fileId,
-  accountToken,
-  websiteToken
+  file,
+  folderId = GOFILE_FOLDER
 ) {
-
-  const url =
-    `${GOFILE_API}/contents/` +
-    `${encodeURIComponent(fileId)}`;
-
-
-  const response =
-    await jsonRequest(
-      "GET",
-      url,
-      {
-
-        headers: {
-
-          "Authorization":
-            `Bearer ${accountToken}`,
-
-          "X-Website-Token":
-            websiteToken,
-
-          "X-BL":
-            LANGUAGE,
-
-          "User-Agent":
-            USER_AGENT,
-
-          "Accept":
-            "application/json",
-
-          "Referer":
-            `${GOFILE_WEB}/d/${GOFILE_FOLDER}`,
-
-          "Origin":
-            GOFILE_WEB
-
-        },
-
-        timeout:
-          REQUEST_TIMEOUT
-
-      }
-    );
-
-
   if (
-    response.data &&
-    response.data.status === "ok" &&
-    response.data.data
+    !file
   ) {
-
-    const data =
-      response.data.data;
-
-
-    let realLink = null;
-
-
-    /*
-    -------------------------------------------------------
-    Real video link
-    -------------------------------------------------------
-    */
-
-    const possibleLinks = [
-
-      data.link,
-
-      data.directLink,
-
-      data.downloadLink
-
-    ];
-
-
-    for (
-      const link of possibleLinks
-    ) {
-
-      if (
-        typeof link === "string" &&
-        link.startsWith("http")
-      ) {
-
-        realLink =
-          link;
-
-        break;
-
-      }
-
-    }
-
-
-    /*
-    -------------------------------------------------------
-    Thumbnail
-    -------------------------------------------------------
-    */
-
-    const thumbnail =
-      typeof data.thumbnail === "string" &&
-      data.thumbnail.startsWith("http")
-        ? data.thumbnail
-        : null;
-
-
-    /*
-    -------------------------------------------------------
-    Metadata
-    -------------------------------------------------------
-    */
-
-    const createTime =
-      Number(
-        data.createTime ||
-        0
-      );
-
-
-    const modTime =
-      Number(
-        data.modTime ||
-        0
-      );
-
-
-    if (
-      realLink
-    ) {
-
-      return {
-
-        link:
-          realLink,
-
-        thumbnail,
-
-        createTime,
-
-        modTime
-
-      };
-
-    }
-
+    return null;
   }
 
+  if (
+    file.link
+  ) {
+    return file.link;
+  }
 
-  console.log(
-    `[GoFile] Unable to get real link for ${fileId}:`,
-    response.data ||
-      response.body
-  );
+  if (
+    file.downloadPage
+  ) {
+    return file.downloadPage;
+  }
 
+  if (
+    file.url
+  ) {
+    return file.url;
+  }
+
+  const fileId =
+    file.id ||
+    file.fileId;
+
+  if (
+    !fileId
+  ) {
+    return null;
+  }
+
+  const accountToken =
+    await createAccount();
+
+  const websiteToken =
+    await getWebsiteToken(
+      folderId
+    );
+
+  const urls = [
+    `${GOFILE_API}/contents/${encodeURIComponent(fileId)}?token=${encodeURIComponent(accountToken)}`,
+    `${GOFILE_API}/contents/${encodeURIComponent(fileId)}`
+  ];
+
+  for (
+    const url of urls
+  ) {
+    try {
+      const response =
+        await jsonRequest(
+          "GET",
+          url,
+          {
+            headers: {
+              "Authorization":
+                `Bearer ${accountToken}`,
+              "X-Website-Token":
+                websiteToken,
+              "Origin":
+                GOFILE_WEB,
+              "Referer":
+                `${GOFILE_WEB}/d/${encodeURIComponent(folderId)}`
+            }
+          }
+        );
+
+      if (
+        response.data &&
+        response.data.status ===
+          "ok"
+      ) {
+        const data =
+          response.data.data ||
+          {};
+
+        const candidate =
+          data.link ||
+          data.downloadPage ||
+          data.url ||
+          data.directLink;
+
+        if (
+          candidate
+        ) {
+          return candidate;
+        }
+      }
+    } catch (_) {
+      continue;
+    }
+  }
 
   return null;
-
 }
-
 
 /*
 =========================================================
@@ -1693,412 +957,59 @@ async function getFileLink(
 
 async function inspectFile(
   fileId,
-  accountToken,
-  websiteToken
+  folderId = GOFILE_FOLDER
 ) {
-
-  const url =
-    `${GOFILE_API}/contents/` +
-    `${encodeURIComponent(fileId)}`;
-
-
-  const response =
-    await jsonRequest(
-      "GET",
-      url,
-      {
-
-        headers: {
-
-          "Authorization":
-            `Bearer ${accountToken}`,
-
-          "X-Website-Token":
-            websiteToken,
-
-          "X-BL":
-            LANGUAGE,
-
-          "User-Agent":
-            USER_AGENT,
-
-          "Accept":
-            "application/json",
-
-          "Referer":
-            `${GOFILE_WEB}/d/${GOFILE_FOLDER}`,
-
-          "Origin":
-            GOFILE_WEB
-
-        },
-
-        timeout:
-          REQUEST_TIMEOUT
-
-      }
+  const folder =
+    await loadFolder(
+      folderId,
+      false
     );
 
-
-  return {
-
-    requestUrl:
-      url,
-
-    httpStatus:
-      response.status,
-
-    gofileStatus:
-      response.data &&
-      response.data.status,
-
-    data:
-      response.data &&
-      response.data.data
-        ? response.data.data
-        : null,
-
-    rawBody:
-      response.body
-
-  };
-
-}
-
-
-/*
-=========================================================
- TEST DIRECT LINK
-=========================================================
-*/
-
-async function testDirectLink(
-  fileId,
-  accountToken,
-  websiteToken
-) {
-
-  const apiToken =
-    process.env.GOFILE_TOKEN;
-
-
-  if (
-    !apiToken
-  ) {
-
-    return {
-
-      ok:
-        false,
-
-      error:
-        "GOFILE_TOKEN não está configurado no Render"
-
-    };
-
-  }
-
-
-  const url =
-    `${GOFILE_API}/contents/` +
-    `${encodeURIComponent(fileId)}` +
-    `/directlinks`;
-
-
-  try {
-
-    const result =
-      await jsonRequest(
-        "POST",
-        url,
-        {
-
-          headers: {
-
-            "Authorization":
-              `Bearer ${apiToken}`,
-
-            "User-Agent":
-              USER_AGENT,
-
-            "Accept":
-              "application/json",
-
-            "Content-Type":
-              "application/json",
-
-            "X-BL":
-              LANGUAGE
-
-          },
-
-          body:
-            JSON.stringify({})
-
-        }
-      );
-
-
-    return {
-
-      ok:
-        true,
-
-      authentication:
-        "GOFILE_TOKEN",
-
-      tokenConfigured:
-        true,
-
-      fileId,
-
-      response:
-        result
-
-    };
-
-  } catch (err) {
-
-    return {
-
-      ok:
-        false,
-
-      authentication:
-        "GOFILE_TOKEN",
-
-      tokenConfigured:
-        true,
-
-      fileId,
-
-      error:
-        err.message
-
-    };
-
-  }
-
-}
-
-
-/*
-=========================================================
- VIDEO CHECK
-=========================================================
-*/
-
-function isVideo(
-  file
-) {
+  const file =
+    folder.files.find(
+      item =>
+        String(
+          item.id
+        ) ===
+        String(
+          fileId
+        )
+    );
 
   if (
     !file
   ) {
-
-    return false;
-
+    return {
+      ok: false,
+      error:
+        "Ficheiro não encontrado."
+    };
   }
 
+  let link =
+    null;
 
-  const name =
-    String(
-      file.name ||
-      file.originalName ||
-      ""
-    ).toLowerCase();
-
-
-  const extensions = [
-
-    ".mp4",
-    ".mkv",
-    ".avi",
-    ".mov",
-    ".webm",
-    ".m4v",
-    ".ts",
-    ".m2ts",
-    ".wmv",
-    ".flv"
-
-  ];
-
-
-  return extensions.some(
-    ext =>
-      name.endsWith(ext)
-  );
-
-}
-
-
-/*
-=========================================================
- EXTRACT FILES
-=========================================================
-*/
-
-function extractFiles(
-  contents
-) {
-
-  const result = [];
-
-  let items = [];
-
-
-  if (
-    contents &&
-    contents.data &&
-    contents.data.children
-  ) {
-
-    items =
-      contents.data.children;
-
+  try {
+    link =
+      await getFileLink(
+        file,
+        folderId
+      );
+  } catch (error) {
+    return {
+      ok: false,
+      error:
+        error.message,
+      file
+    };
   }
-
-  else if (
-    contents &&
-    contents.data &&
-    contents.data.contents
-  ) {
-
-    items =
-      contents.data.contents;
-
-  }
-
-  else if (
-    contents &&
-    contents.contents
-  ) {
-
-    items =
-      contents.contents;
-
-  }
-
-
-  if (
-    Array.isArray(items)
-  ) {
-
-    for (
-      const item of items
-    ) {
-
-      if (
-        isVideo(item)
-      ) {
-
-        result.push(item);
-
-      }
-
-    }
-
-  }
-
-
-  else if (
-    items &&
-    typeof items === "object"
-  ) {
-
-    for (
-      const key of Object.keys(items)
-    ) {
-
-      const item =
-        items[key];
-
-
-      if (
-        isVideo(item)
-      ) {
-
-        result.push(item);
-
-      }
-
-    }
-
-  }
-
-
-  return result;
-
-}
-
-
-/*
-=========================================================
- NORMALIZE FILE
-=========================================================
-*/
-
-function normalizeFile(
-  file
-) {
 
   return {
-
-    id:
-      file.id ||
-      file.fileId ||
-      file.contentId,
-
-    name:
-      file.name ||
-      file.originalName ||
-      "Video",
-
-    size:
-      file.size ||
-      0,
-
-    link:
-      typeof file.link === "string" &&
-      file.link.startsWith("http")
-        ? file.link
-        : null,
-
-    thumbnail:
-      typeof file.thumbnail === "string" &&
-      file.thumbnail.startsWith("http")
-        ? file.thumbnail
-        : null,
-
-    createTime:
-      Number(
-        file.createTime ||
-        0
-      ),
-
-    modTime:
-      Number(
-        file.modTime ||
-        0
-      ),
-
-    type:
-      file.type ||
-      "video",
-
-    server:
-      file.serverChoosen ||
-      file.server ||
-      null,
-
-    raw:
-      file
-
+    ok: true,
+    file,
+    link
   };
-
 }
-
 
 /*
 =========================================================
@@ -2109,185 +1020,91 @@ function normalizeFile(
 function sortFiles(
   files
 ) {
+  const list =
+    Array.isArray(files)
+      ? [...files]
+      : [];
 
-  const sorted =
-    [...files];
-
-
-  const normalizeName =
-    file =>
+  const compareName =
+    (a, b) =>
       String(
-        file.name || ""
-      ).toLocaleLowerCase(
-        "pt-PT"
+        a.name || ""
+      ).localeCompare(
+        String(
+          b.name || ""
+        ),
+        undefined,
+        {
+          numeric: true,
+          sensitivity:
+            "base"
+        }
       );
 
+  const compareDate =
+    (a, b) => {
+      const da =
+        Number(
+          a.createTime ||
+          a.modTime ||
+          a.mtime ||
+          a.modifiedTime ||
+          0
+        );
+
+      const db =
+        Number(
+          b.createTime ||
+          b.modTime ||
+          b.mtime ||
+          b.modifiedTime ||
+          0
+        );
+
+      return (
+        da - db
+      );
+    };
 
   switch (
     GOFILE_SORT
   ) {
-
-    /*
-    -------------------------------------------------------
-    NAME A → Z
-    -------------------------------------------------------
-    */
-
-    case "name_asc":
-
-      sorted.sort(
-        (a, b) =>
-          normalizeName(a)
-            .localeCompare(
-              normalizeName(b),
-              "pt-PT",
-              {
-                numeric:
-                  true,
-
-                sensitivity:
-                  "base"
-              }
-            )
-      );
-
-      break;
-
-
-    /*
-    -------------------------------------------------------
-    NAME Z → A
-    -------------------------------------------------------
-    */
-
     case "name_desc":
-
-      sorted.sort(
+      list.sort(
         (a, b) =>
-          normalizeName(b)
-            .localeCompare(
-              normalizeName(a),
-              "pt-PT",
-              {
-                numeric:
-                  true,
-
-                sensitivity:
-                  "base"
-              }
-            )
+          compareName(
+            b,
+            a
+          )
       );
-
       break;
-
-
-    /*
-    -------------------------------------------------------
-    DATE NEWEST → OLDEST
-    -------------------------------------------------------
-    */
 
     case "date_desc":
-
-      sorted.sort(
-        (a, b) => {
-
-          const dateA =
-            Number(
-              a.modTime ||
-              a.createTime ||
-              0
-            );
-
-          const dateB =
-            Number(
-              b.modTime ||
-              b.createTime ||
-              0
-            );
-
-
-          return dateB - dateA;
-
-        }
+      list.sort(
+        (a, b) =>
+          compareDate(
+            b,
+            a
+          )
       );
-
       break;
-
-
-    /*
-    -------------------------------------------------------
-    DATE OLDEST → NEWEST
-    -------------------------------------------------------
-    */
 
     case "date_asc":
-
-      sorted.sort(
-        (a, b) => {
-
-          const dateA =
-            Number(
-              a.modTime ||
-              a.createTime ||
-              0
-            );
-
-          const dateB =
-            Number(
-              b.modTime ||
-              b.createTime ||
-              0
-            );
-
-
-          return dateA - dateB;
-
-        }
+      list.sort(
+        compareDate
       );
-
       break;
 
-
-    /*
-    -------------------------------------------------------
-    INVALID VALUE
-    -------------------------------------------------------
-    */
-
+    case "name_asc":
     default:
-
-      console.log(
-        `[GoFile] Unknown GOFILE_SORT="${GOFILE_SORT}". ` +
-        `Using name_asc.`
+      list.sort(
+        compareName
       );
-
-
-      sorted.sort(
-        (a, b) =>
-          normalizeName(a)
-            .localeCompare(
-              normalizeName(b),
-              "pt-PT",
-              {
-                numeric:
-                  true,
-
-                sensitivity:
-                  "base"
-              }
-            )
-      );
-
       break;
-
   }
 
-
-  return sorted;
-
+  return list;
 }
-
 
 /*
 =========================================================
@@ -2296,189 +1113,323 @@ function sortFiles(
 */
 
 async function loadFolder(
+  folderId = GOFILE_FOLDER,
   force = false
 ) {
+  const normalized =
+    normalizeFolderId(
+      folderId
+    );
 
-  const now =
-    Date.now();
+  if (
+    !normalized
+  ) {
+    throw new Error(
+      "Folder ID inválido."
+    );
+  }
 
+  const cached =
+    folderCache.get(
+      normalized
+    );
 
   if (
     !force &&
-    folderCache.timestamp &&
-    now -
-      folderCache.timestamp
-      <
-      CACHE_TIME &&
-    folderCache.files.length
+    cached &&
+    Date.now() -
+      cached.timestamp <
+      CACHE_TIME
   ) {
-
-    return folderCache.files;
-
+    return cached.data;
   }
 
-
-  console.log(
-    `[GoFile] Loading folder ${GOFILE_FOLDER}`
-  );
-
-
-  const account =
+  const accountToken =
     await createAccount();
 
-
-  const generated =
-    await generateWebsiteToken(
-      account.token
+  const websiteToken =
+    await getWebsiteToken(
+      normalized
     );
 
+  const url =
+    `${GOFILE_API}/contents/${encodeURIComponent(normalized)}?token=${encodeURIComponent(accountToken)}&websiteToken=${encodeURIComponent(websiteToken)}&cache=true`;
 
-  console.log(
-    `[GoFile] Website token generated: ` +
-    `${generated.token.slice(
-      0,
-      12
-    )}...`
-  );
-
-
-  console.log(
-    `[GoFile] WT script: ${generated.scriptUrl}`
-  );
-
-
-  const contents =
-    await getContentsWithRetry(
-      GOFILE_FOLDER,
-      account.token,
-      generated.token
-    );
-
-
-  const rawFiles =
-    extractFiles(
-      contents
-    );
-
-
-  const files = [];
-
-
-  for (
-    const rawFile of rawFiles
-  ) {
-
-    const file =
-      normalizeFile(
-        rawFile
-      );
-
-
-    /*
-    -------------------------------------------------------
-    The folder API often returns:
-    "link": true
-
-    Therefore we query the individual file endpoint.
-    -------------------------------------------------------
-    */
-
-    if (
-      !file.link
-    ) {
-
-      const fileInfo =
-        await getFileLink(
-          file.id,
-          account.token,
-          generated.token
-        );
-
-
-      if (
-        fileInfo
-      ) {
-
-        file.link =
-          fileInfo.link;
-
-        file.thumbnail =
-          fileInfo.thumbnail;
-
-        file.createTime =
-          fileInfo.createTime;
-
-        file.modTime =
-          fileInfo.modTime;
-
+  const response =
+    await jsonRequest(
+      "GET",
+      url,
+      {
+        headers: {
+          "Authorization":
+            `Bearer ${accountToken}`,
+          "X-Website-Token":
+            websiteToken,
+          "Origin":
+            GOFILE_WEB,
+          "Referer":
+            `${GOFILE_WEB}/d/${encodeURIComponent(normalized)}`
+        }
       }
+    );
 
-    }
-
-
-    /*
-    -------------------------------------------------------
-    If metadata already exists in folder response,
-    keep it. Otherwise individual endpoint filled it.
-    -------------------------------------------------------
-    */
-
-    if (
-      file.link
-    ) {
-
-      files.push(
-        file
-      );
-
-    } else {
-
-      console.log(
-        `[GoFile] No playable link for: ${file.name}`
-      );
-
-    }
-
+  if (
+    !response.data ||
+    response.data.status !==
+      "ok"
+  ) {
+    throw new Error(
+      `Erro ao carregar pasta GoFile: HTTP ${
+        response.status
+      } ${response.body}`
+    );
   }
 
+  const data =
+    response.data.data ||
+    {};
 
-  /*
-  -------------------------------------------------------
-  SORT
-  -------------------------------------------------------
-  */
+  const children =
+    data.children ||
+    data.contents ||
+    data.files ||
+    {};
 
-  const sortedFiles =
+  let files = [];
+
+  if (
+    Array.isArray(
+      children
+    )
+  ) {
+    files =
+      children;
+  } else {
+    files =
+      Object.values(
+        children
+      );
+  }
+
+  files =
+    files.filter(
+      file =>
+        file &&
+        (
+          file.type ===
+            "file" ||
+          file.type ===
+            "video" ||
+          file.mimeType ||
+          file.mime ||
+          file.name
+        )
+    );
+
+  files =
     sortFiles(
       files
     );
 
-
-  console.log(
-    `[GoFile] Found ${sortedFiles.length} video files`
-  );
-
-
-  console.log(
-    `[GoFile] Sort mode: ${GOFILE_SORT}`
-  );
-
-
-  folderCache = {
-
-    timestamp:
-      now,
-
-    files:
-      sortedFiles
-
+  const result = {
+    folderId:
+      normalized,
+    name:
+      data.name ||
+      normalized,
+    files
   };
 
+  folderCache.set(
+    normalized,
+    {
+      timestamp:
+        Date.now(),
+      data:
+        result
+    }
+  );
 
-  return sortedFiles;
-
+  return result;
 }
 
+/*
+=========================================================
+ LOAD ALL FOLDERS
+=========================================================
+*/
+
+async function loadAllFolders(
+  folderId = GOFILE_FOLDER,
+  force = false
+) {
+  return loadFolder(
+    folderId,
+    force
+  );
+}
+
+/*
+=========================================================
+ MIME HELPERS
+=========================================================
+*/
+
+function isVideoFile(
+  file
+) {
+  if (
+    !file
+  ) {
+    return false;
+  }
+
+  const mime =
+    String(
+      file.mimeType ||
+      file.mime ||
+      ""
+    ).toLowerCase();
+
+  const name =
+    String(
+      file.name ||
+      ""
+    ).toLowerCase();
+
+  if (
+    mime.startsWith(
+      "video/"
+    )
+  ) {
+    return true;
+  }
+
+  return /\.(mp4|mkv|avi|mov|webm|m4v|ts|m2ts|wmv|flv)$/i.test(
+    name
+  );
+}
+
+function getMimeType(
+  file
+) {
+  const mime =
+    file &&
+    (
+      file.mimeType ||
+      file.mime
+    );
+
+  if (
+    mime
+  ) {
+    return mime;
+  }
+
+  const name =
+    String(
+      file &&
+      file.name ||
+      ""
+    ).toLowerCase();
+
+  if (
+    name.endsWith(
+      ".mp4"
+    )
+  ) {
+    return "video/mp4";
+  }
+
+  if (
+    name.endsWith(
+      ".mkv"
+    )
+  ) {
+    return "video/x-matroska";
+  }
+
+  if (
+    name.endsWith(
+      ".webm"
+    )
+  ) {
+    return "video/webm";
+  }
+
+  if (
+    name.endsWith(
+      ".mov"
+    )
+  ) {
+    return "video/quicktime";
+  }
+
+  if (
+    name.endsWith(
+      ".avi"
+    )
+  ) {
+    return "video/x-msvideo";
+  }
+
+  if (
+    name.endsWith(
+      ".m4v"
+    )
+  ) {
+    return "video/x-m4v";
+  }
+
+  if (
+    name.endsWith(
+      ".ts"
+    ) ||
+    name.endsWith(
+      ".m2ts"
+    )
+  ) {
+    return "video/mp2t";
+  }
+
+  return "application/octet-stream";
+}
+
+/*
+=========================================================
+ FILE NAME HELPERS
+=========================================================
+*/
+
+function cleanTitle(
+  name
+) {
+  let title =
+    String(
+      name ||
+      ""
+    );
+
+  title =
+    title.replace(
+      /\.[^.]+$/,
+      ""
+    );
+
+  title =
+    title.replace(
+      /[_]+/g,
+      " "
+    );
+
+  title =
+    title.replace(
+      /\s+/g,
+      " "
+    );
+
+  return title.trim();
+}
 
 /*
 =========================================================
@@ -2486,1044 +1437,893 @@ async function loadFolder(
 =========================================================
 */
 
-const manifest = {
+function buildManifest(
+  folderId = null
+) {
+  const configured =
+    !!folderId;
 
-  id:
-    "com.andre.gofile",
+  return {
+    id:
+      "com.andre.gofile",
 
-  version:
-    "1.2.0",
+    version:
+      "1.4.0",
 
-  name:
-    "GoFile Vídeos CL",
+    name:
+      "GoFile Videos",
 
-  description:
-    "Streams videos from a GoFile folder.",
+    description:
+      "Streams videos from a GoFile folder.",
 
-  logo:
-    "https://gofile.io/dist/img/favicon.png",
+    logo:
+      "https://gofile.io/dist/img/favicon.png",
 
-  resources: [
+    resources: [
+      "catalog",
+      "meta",
+      "stream"
+    ],
 
-    "catalog",
-    "meta",
-    "stream"
+    types: [
+      "other"
+    ],
 
-  ],
+    catalogs: [
+      {
+        type:
+          "other",
+        id:
+          "gofile-videos",
+        name:
+          "GoFile Videos"
+      }
+    ],
 
-  types: [
-    "other"
-  ],
+    idPrefixes: [
+      "gofile:"
+    ],
 
-  catalogs: [
+    behaviorHints: {
+      configurable:
+        true,
+      configurationRequired:
+        !configured
+    },
 
-    {
-
-      type:
-        "other",
-
-      id:
-        "gofile-videos",
-
-      name:
-        "GoFile Vídeos UCL"
-
-    }
-
-  ],
-
-  idPrefixes: [
-    "gofile:"
-  ],
-
-  behaviorHints: {
-
-    configurable:
-      true,
-
-    configurationRequired:
-      false
-
-  }
-
-};
-
+    config: [
+      {
+        key:
+          "gofile_folder",
+        type:
+          "text",
+        title:
+          "ID ou URL da pasta GoFile",
+        required:
+          true
+      }
+    ]
+  };
+}
 
 /*
 =========================================================
- REMOVE EXTENSION
+ NORMALIZE FOLDER ID
 =========================================================
 */
 
-function removeExtension(
-  name
+function normalizeFolderId(
+  value
 ) {
+  if (
+    !value
+  ) {
+    return null;
+  }
 
-  return String(name)
-    .replace(
-      /\.[^/.]+$/,
-      ""
-    );
+  let folder =
+    String(
+      value
+    ).trim();
 
+  try {
+    if (
+      /^https?:\/\//i.test(
+        folder
+      )
+    ) {
+      const url =
+        new URL(
+          folder
+        );
+
+      const parts =
+        url.pathname
+          .split("/")
+          .filter(
+            Boolean
+          );
+
+      const dIndex =
+        parts.indexOf(
+          "d"
+        );
+
+      if (
+        dIndex >=
+          0 &&
+        parts[
+          dIndex + 1
+        ]
+      ) {
+        folder =
+          parts[
+            dIndex + 1
+          ];
+      }
+    }
+  } catch (_) {}
+
+  try {
+    folder =
+      decodeURIComponent(
+        folder
+      );
+  } catch (_) {}
+
+  folder =
+    folder
+      .replace(
+        /^\/+|\/+$/g,
+        ""
+      )
+      .trim();
+
+  if (
+    !folder
+  ) {
+    return null;
+  }
+
+  if (
+    folder === "." ||
+    folder === ".." ||
+    folder.includes(
+      "/"
+    ) ||
+    folder.includes(
+      "\\"
+    )
+  ) {
+    return null;
+  }
+
+  return folder;
 }
-
 
 /*
 =========================================================
- SEND JSON
+ ADDON CONTEXT
+=========================================================
+*/
+
+function getAddonContext(
+  pathname
+) {
+  const prefixed =
+    pathname.match(
+      /^\/([^/]+)(\/.*)$/
+    );
+
+  if (
+    !prefixed
+  ) {
+    return {
+      folderId:
+        null,
+      addonPath:
+        pathname
+    };
+  }
+
+  const candidate =
+    normalizeFolderId(
+      prefixed[1]
+    );
+
+  const rest =
+    prefixed[2];
+
+  const isAddonRoute =
+    rest ===
+      "/manifest.json" ||
+    rest ===
+      "/configure" ||
+    rest ===
+      "/diagnostico" ||
+    rest ===
+      "/refresh" ||
+    rest ===
+      "/teste-link" ||
+    rest ===
+      "/teste-file" ||
+    rest ===
+      "/teste-wt" ||
+    rest.startsWith(
+      "/catalog/"
+    ) ||
+    rest.startsWith(
+      "/meta/"
+    ) ||
+    rest.startsWith(
+      "/thumbnail/"
+    ) ||
+    rest.startsWith(
+      "/proxy/"
+    ) ||
+    rest.startsWith(
+      "/stream/"
+    );
+
+  if (
+    candidate &&
+    isAddonRoute
+  ) {
+    return {
+      folderId:
+        candidate,
+      addonPath:
+        rest
+    };
+  }
+
+  return {
+    folderId:
+      null,
+    addonPath:
+      pathname
+  };
+}
+
+/*
+=========================================================
+ HTML ESCAPE
+=========================================================
+*/
+
+function escapeHtml(
+  value
+) {
+  return String(
+    value || ""
+  )
+    .replace(
+      /&/g,
+      "&amp;"
+    )
+    .replace(
+      /</g,
+      "&lt;"
+    )
+    .replace(
+      />/g,
+      "&gt;"
+    )
+    .replace(
+      /\"/g,
+      "&quot;"
+    )
+    .replace(
+      /'/g,
+      "&#039;"
+    );
+}
+
+/*
+=========================================================
+ CONFIGURE PAGE
+=========================================================
+*/
+
+function renderConfigurePage(
+  req,
+  res,
+  currentFolder = ""
+) {
+  const forwardedProto =
+    String(
+      req.headers[
+        "x-forwarded-proto"
+      ] ||
+      ""
+    )
+      .split(",")[0]
+      .trim();
+
+  const protocol =
+    forwardedProto ||
+    "https";
+
+  const host =
+    req.headers.host ||
+    "";
+
+  const escapedFolder =
+    escapeHtml(
+      currentFolder
+    );
+
+  const html = `
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GoFile Videos</title>
+<style>
+body {
+  font-family: Arial, sans-serif;
+  background: #111;
+  color: #fff;
+  margin: 0;
+  padding: 40px 20px;
+}
+.container {
+  max-width: 620px;
+  margin: 0 auto;
+}
+h1 {
+  margin-bottom: 10px;
+}
+p {
+  color: #ccc;
+  line-height: 1.5;
+}
+label {
+  display: block;
+  margin-top: 25px;
+  margin-bottom: 8px;
+}
+input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 14px;
+  border-radius: 8px;
+  border: 1px solid #444;
+  background: #222;
+  color: #fff;
+  font-size: 16px;
+}
+button {
+  margin-top: 20px;
+  padding: 14px 20px;
+  border: 0;
+  border-radius: 8px;
+  background: #4caf50;
+  color: white;
+  font-size: 16px;
+  cursor: pointer;
+}
+.small {
+  font-size: 13px;
+  color: #999;
+}
+</style>
+</head>
+<body>
+<div class="container">
+<h1>GoFile Videos</h1>
+
+<p>
+Escolhe a pasta GoFile que queres utilizar neste addon.
+</p>
+
+<label for="folder">
+ID ou URL da pasta GoFile
+</label>
+
+<input
+  id="folder"
+  type="text"
+  value="${escapedFolder}"
+  placeholder="Ex.: Hg4qUe ou https://gofile.io/d/Hg4qUe"
+/>
+
+<button onclick="installAddon()">
+Adicionar ao Stremio
+</button>
+
+<p class="small">
+A pasta escolhida fica associada apenas a esta instalação
+do addon no Stremio.
+</p>
+</div>
+
+<script>
+function extractFolder(value) {
+  value = String(value || "").trim();
+
+  if (!value) {
+    return "";
+  }
+
+  try {
+    if (/^https?:\\/\\//i.test(value)) {
+      const url = new URL(value);
+      const parts =
+        url.pathname
+          .split("/")
+          .filter(Boolean);
+
+      const index =
+        parts.indexOf("d");
+
+      if (
+        index >= 0 &&
+        parts[index + 1]
+      ) {
+        return parts[index + 1];
+      }
+    }
+  } catch (e) {}
+
+  return value
+    .replace(/^\\/+|\\/+$/g, "")
+    .trim();
+}
+
+function installAddon() {
+  const input =
+    document.getElementById("folder");
+
+  const folder =
+    extractFolder(
+      input.value
+    );
+
+  if (!folder) {
+    alert(
+      "Introduz o ID ou URL da pasta GoFile."
+    );
+    return;
+  }
+
+  const host =
+    ${JSON.stringify(host)};
+
+  const protocol =
+    ${JSON.stringify(protocol)};
+
+  const url =
+    "stremio://" +
+    host +
+    "/" +
+    encodeURIComponent(folder) +
+    "/manifest.json";
+
+  window.location.href =
+    url;
+}
+</script>
+</body>
+</html>
+`;
+
+  res.writeHead(
+    200,
+    {
+      "Content-Type":
+        "text/html; charset=utf-8",
+      "Cache-Control":
+        "no-store"
+    }
+  );
+
+  res.end(
+    html
+  );
+}
+
+/*
+=========================================================
+ RESPONSE HELPERS
 =========================================================
 */
 
 function sendJson(
   res,
-  object,
-  status = 200
+  status,
+  data
 ) {
-
-  res.statusCode =
-    status;
-
-
-  res.setHeader(
-    "Content-Type",
-    "application/json; charset=utf-8"
+  res.writeHead(
+    status,
+    {
+      "Content-Type":
+        "application/json; charset=utf-8",
+      "Cache-Control":
+        "no-store",
+      "Access-Control-Allow-Origin":
+        "*"
+    }
   );
-
-
-  res.setHeader(
-    "Cache-Control",
-    "no-store"
-  );
-
 
   res.end(
     JSON.stringify(
-      object,
-      null,
-      2
+      data
     )
   );
-
 }
 
+function sendText(
+  res,
+  status,
+  text
+) {
+  res.writeHead(
+    status,
+    {
+      "Content-Type":
+        "text/plain; charset=utf-8",
+      "Cache-Control":
+        "no-store"
+    }
+  );
+
+  res.end(
+    text
+  );
+}
 
 /*
 =========================================================
- DIAGNOSTIC
+ HTTP STREAM / PROXY
 =========================================================
 */
 
-async function diagnostic(
-  res
+function proxyRequest(
+  req,
+  res,
+  targetUrl,
+  extraHeaders = {}
 ) {
+  return new Promise(
+    (resolve, reject) => {
+      let url;
 
-  const result = {
+      try {
+        url =
+          new URL(
+            targetUrl
+          );
+      } catch (error) {
+        reject(error);
+        return;
+      }
 
-    addon:
-      "ok",
+      const headers = {
+        "User-Agent":
+          USER_AGENT,
+        "Accept":
+          "*/*",
+        "Referer":
+          `${GOFILE_WEB}/`,
+        "Origin":
+          GOFILE_WEB,
+        ...extraHeaders
+      };
 
-    folderId:
-      GOFILE_FOLDER,
+      if (
+        req.headers.range
+      ) {
+        headers.Range =
+          req.headers.range;
+      }
 
-    folderUrl:
-      `${GOFILE_WEB}/d/${GOFILE_FOLDER}`,
+      const client =
+        https.request(
+          {
+            protocol:
+              url.protocol,
+            hostname:
+              url.hostname,
+            port:
+              url.port || 443,
+            path:
+              url.pathname +
+              url.search,
+            method:
+              "GET",
+            headers,
+            family:
+              4,
+            timeout:
+              REQUEST_TIMEOUT
+          },
+          upstream => {
+            const responseHeaders = {};
 
-    sort:
-      GOFILE_SORT,
+            const allowedHeaders = [
+              "content-type",
+              "content-length",
+              "content-range",
+              "accept-ranges",
+              "cache-control",
+              "etag",
+              "last-modified"
+            ];
 
-    userAgent:
-      USER_AGENT,
+            for (
+              const key of allowedHeaders
+            ) {
+              if (
+                upstream.headers[key]
+              ) {
+                responseHeaders[
+                  key
+                ] =
+                  upstream.headers[
+                    key
+                  ];
+              }
+            }
 
-    language:
-      LANGUAGE,
+            responseHeaders[
+              "Access-Control-Allow-Origin"
+            ] = "*";
 
-    api:
-      GOFILE_API,
+            responseHeaders[
+              "Cache-Control"
+            ] =
+              "no-store";
 
-    tests: {
+            res.writeHead(
+              upstream.statusCode ||
+                200,
+              responseHeaders
+            );
 
-      websiteScript:
-        false,
+            upstream.pipe(
+              res
+            );
 
-      websiteScriptUrl:
-        null,
+            upstream.on(
+              "end",
+              resolve
+            );
 
-      websiteScriptHttpStatus:
-        null,
-
-      websiteSecret:
-        false,
-
-      websiteToken:
-        false,
-
-      accountStatus:
-        null,
-
-      accountOk:
-        false,
-
-      contentStatus:
-        null,
-
-      contentOk:
-        false,
-
-      fileCount:
-        0,
-
-      error:
-        null
-
-    },
-
-    folder: {
-
-      ok:
-        false,
-
-      count:
-        0,
-
-      files:
-        []
-
-    }
-
-  };
-
-
-  try {
-
-    const discovered =
-      await discoverWebsiteTokenScript();
-
-
-    if (
-      !discovered
-    ) {
-
-      throw new Error(
-        "Unable to obtain Gofile wt.obf.js"
-      );
-
-    }
-
-
-    result.tests.websiteScript =
-      true;
-
-
-    if (
-      typeof discovered ===
-      "object"
-    ) {
-
-      result.tests.websiteScriptUrl =
-        discovered.url;
-
-      result.tests.websiteScriptHttpStatus =
-        200;
-
-    } else {
-
-      result.tests.websiteScriptUrl =
-        discovered;
-
-    }
-
-
-    const wt =
-      await getWebsiteTokenSecret();
-
-
-    result.tests.websiteScriptUrl =
-      wt.scriptUrl;
-
-    result.tests.websiteSecret =
-      !!wt.secret;
-
-
-    const account =
-      await createAccount();
-
-
-    result.tests.accountOk =
-      true;
-
-
-    const generated =
-      await generateWebsiteToken(
-        account.token
-      );
-
-
-    result.tests.websiteToken =
-      !!generated.token;
-
-
-    let contents;
-
-
-    try {
-
-      contents =
-        await getContentsWithRetry(
-          GOFILE_FOLDER,
-          account.token,
-          generated.token
+            upstream.on(
+              "error",
+              reject
+            );
+          }
         );
 
-    } catch (error) {
-
-      result.tests.contentStatus =
-        error.gofileStatus ||
-        error.httpStatus ||
-        null;
-
-      throw error;
-
-    }
-
-
-    result.tests.contentOk =
-      true;
-
-
-    const files =
-      extractFiles(
-        contents
-      )
-      .map(
-        normalizeFile
+      client.on(
+        "timeout",
+        () => {
+          client.destroy(
+            new Error(
+              "Proxy timeout"
+            )
+          );
+        }
       );
 
+      client.on(
+        "error",
+        reject
+      );
 
-    result.tests.fileCount =
-      files.length;
-
-
-    result.folder = {
-
-      ok:
-        true,
-
-      count:
-        files.length,
-
-      files:
-        files
-          .slice(0, 100)
-          .map(
-            file => ({
-
-              id:
-                file.id,
-
-              name:
-                file.name,
-
-              link:
-                !!file.link,
-
-              thumbnail:
-                !!file.thumbnail,
-
-              createTime:
-                file.createTime,
-
-              modTime:
-                file.modTime,
-
-              server:
-                file.server
-
-            })
-          )
-
-    };
-
-
-  } catch (error) {
-
-    console.error(
-      "[DIAGNOSTIC ERROR]",
-      error
-    );
-
-
-    result.tests.error =
-      error.message;
-
-  }
-
-
-  return sendJson(
-    res,
-    result
+      client.end();
+    }
   );
-
 }
-
 
 /*
 =========================================================
- VIDEO PROXY
+ PROXY VIDEO
 =========================================================
 */
 
 async function proxyVideo(
   req,
   res,
-  file
+  fileId,
+  folderId = GOFILE_FOLDER
 ) {
+  const result =
+    await inspectFile(
+      fileId,
+      folderId
+    );
 
   if (
-    !file ||
-    !file.link ||
-    typeof file.link !== "string"
+    !result.ok ||
+    !result.link
   ) {
-
-    res.statusCode =
-      404;
-
-    return res.end(
-      "Video link not available"
-    );
-
-  }
-
-
-  let account;
-
-
-  try {
-
-    account =
-      await createAccount();
-
-  } catch (error) {
-
-    console.error(
-      "[Proxy] Unable to create GoFile account:",
-      error.message
-    );
-
-
-    res.statusCode =
-      502;
-
-    return res.end(
-      "Unable to authenticate with GoFile"
-    );
-
-  }
-
-
-  const headers = {
-
-    "User-Agent":
-      USER_AGENT,
-
-    "Accept":
-      "*/*",
-
-    "Accept-Language":
-      LANGUAGE,
-
-    "Referer":
-      `${GOFILE_WEB}/d/${GOFILE_FOLDER}`,
-
-    "Origin":
-      GOFILE_WEB,
-
-    "Cookie":
-      `accountToken=${account.token}`,
-
-    "Connection":
-      "close"
-
-  };
-
-
-  if (
-    req.headers.range
-  ) {
-
-    headers.Range =
-      req.headers.range;
-
-  }
-
-
-  let upstream;
-
-
-  try {
-
-    const target =
-      new URL(
-        file.link
-      );
-
-
-    upstream =
-      https.request(
-        {
-
-          protocol:
-            target.protocol,
-
-          hostname:
-            target.hostname,
-
-          port:
-            target.port || 443,
-
-          path:
-            target.pathname +
-            target.search,
-
-          method:
-            req.method === "HEAD"
-              ? "HEAD"
-              : "GET",
-
-          headers,
-
-          family:
-            4,
-
-          timeout:
-            REQUEST_TIMEOUT
-
-        },
-
-        upstreamRes => {
-
-          console.log(
-            `[Proxy] ${req.method} ${file.name} -> ` +
-            `${upstreamRes.statusCode}`
-          );
-
-
-          res.statusCode =
-            upstreamRes.statusCode || 502;
-
-
-          const copyHeaders = [
-
-            "content-type",
-            "content-length",
-            "content-range",
-            "accept-ranges",
-            "etag",
-            "last-modified",
-            "cache-control"
-
-          ];
-
-
-          for (
-            const headerName of copyHeaders
-          ) {
-
-            const value =
-              upstreamRes.headers[
-                headerName
-              ];
-
-
-            if (
-              value !== undefined
-            ) {
-
-              res.setHeader(
-                headerName,
-                value
-              );
-
-            }
-
-          }
-
-
-          if (
-            !res.getHeader(
-              "Content-Type"
-            )
-          ) {
-
-            res.setHeader(
-              "Content-Type",
-              "video/mp4"
-            );
-
-          }
-
-
-          if (
-            upstreamRes.statusCode ===
-            206
-          ) {
-
-            res.statusCode =
-              206;
-
-          }
-
-
-          if (
-            req.method ===
-            "HEAD"
-          ) {
-
-            upstreamRes.resume();
-
-            return res.end();
-
-          }
-
-
-          upstreamRes.pipe(
-            res
-          );
-
-
-          upstreamRes.on(
-            "error",
-            error => {
-
-              console.error(
-                "[Proxy] Upstream stream error:",
-                error.message
-              );
-
-
-              if (
-                !res.headersSent
-              ) {
-
-                res.statusCode =
-                  502;
-
-                res.end();
-
-              } else {
-
-                res.destroy();
-
-              }
-
-            }
-          );
-
-        }
-      );
-
-
-    upstream.on(
-      "timeout",
-      () => {
-
-        console.error(
-          "[Proxy] GoFile request timeout"
-        );
-
-
-        upstream.destroy(
-          new Error(
-            "GoFile video request timeout"
-          )
-        );
-
+    sendJson(
+      res,
+      404,
+      {
+        error:
+          result.error ||
+          "Link de vídeo não encontrado."
       }
     );
 
-
-    upstream.on(
-      "error",
-      error => {
-
-        console.error(
-          "[Proxy] GoFile request error:",
-          error.message
-        );
-
-
-        if (
-          !res.headersSent
-        ) {
-
-          res.statusCode =
-            502;
-
-          res.end(
-            "GoFile proxy error"
-          );
-
-        } else {
-
-          res.destroy();
-
-        }
-
-      }
-    );
-
-
-    upstream.end();
-
-
-  } catch (error) {
-
-    console.error(
-      "[Proxy] Invalid video URL:",
-      error.message
-    );
-
-
-    res.statusCode =
-      500;
-
-    res.end(
-      "Invalid GoFile video URL"
-    );
-
+    return;
   }
 
+  await proxyRequest(
+    req,
+    res,
+    result.link,
+    {
+      "Referer":
+        `${GOFILE_WEB}/d/${encodeURIComponent(folderId)}`,
+      "Origin":
+        GOFILE_WEB
+    }
+  );
 }
-
 
 /*
 =========================================================
- THUMBNAIL PROXY
-=========================================================
-
-O thumbnail do GoFile também pode exigir o
-accountToken.
-
-Por isso o Stremio nunca recebe diretamente
-o URL do GoFile.
-
-Stremio
-   ↓
-/thumbnail/ID
-   ↓
-Render
-   ↓
-GoFile + accountToken
-   ↓
-thumbnail
+ PROXY THUMBNAIL
 =========================================================
 */
 
 async function proxyThumbnail(
   req,
   res,
-  file
+  fileId,
+  folderId = GOFILE_FOLDER
 ) {
+  const result =
+    await inspectFile(
+      fileId,
+      folderId
+    );
 
   if (
-    !file ||
-    !file.thumbnail ||
-    typeof file.thumbnail !== "string"
+    !result.ok
   ) {
-
-    res.statusCode =
-      404;
-
-    return res.end(
-      "Thumbnail not available"
+    sendJson(
+      res,
+      404,
+      {
+        error:
+          result.error ||
+          "Ficheiro não encontrado."
+      }
     );
 
+    return;
   }
 
+  const file =
+    result.file || {};
 
-  let account;
+  const thumbnail =
+    file.thumbnail ||
+    file.thumbnailUrl ||
+    file.poster ||
+    file.posterUrl ||
+    file.image ||
+    file.imageUrl;
 
-
-  try {
-
-    account =
-      await createAccount();
-
-  } catch (error) {
-
-    console.error(
-      "[Thumbnail] Unable to create GoFile account:",
-      error.message
-    );
-
-
-    res.statusCode =
-      502;
-
-    return res.end(
-      "Unable to authenticate with GoFile"
-    );
-
-  }
-
-
-  const headers = {
-
-    "User-Agent":
-      USER_AGENT,
-
-    "Accept":
-      "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-
-    "Accept-Language":
-      LANGUAGE,
-
-    "Referer":
-      `${GOFILE_WEB}/d/${GOFILE_FOLDER}`,
-
-    "Origin":
-      GOFILE_WEB,
-
-    "Cookie":
-      `accountToken=${account.token}`,
-
-    "Connection":
-      "close"
-
-  };
-
-
-  try {
-
-    const target =
-      new URL(
-        file.thumbnail
-      );
-
-
-    const upstream =
-      https.request(
+  if (
+    thumbnail
+  ) {
+    try {
+      await proxyRequest(
+        req,
+        res,
+        thumbnail,
         {
-
-          protocol:
-            target.protocol,
-
-          hostname:
-            target.hostname,
-
-          port:
-            target.port || 443,
-
-          path:
-            target.pathname +
-            target.search,
-
-          method:
-            req.method === "HEAD"
-              ? "HEAD"
-              : "GET",
-
-          headers,
-
-          family:
-            4,
-
-          timeout:
-            REQUEST_TIMEOUT
-
-        },
-
-        upstreamRes => {
-
-          console.log(
-            `[Thumbnail] ${file.name} -> ` +
-            `${upstreamRes.statusCode}`
-          );
-
-
-          res.statusCode =
-            upstreamRes.statusCode || 502;
-
-
-          const copyHeaders = [
-
-            "content-type",
-            "content-length",
-            "cache-control",
-            "etag",
-            "last-modified"
-
-          ];
-
-
-          for (
-            const headerName of copyHeaders
-          ) {
-
-            const value =
-              upstreamRes.headers[
-                headerName
-              ];
-
-
-            if (
-              value !== undefined
-            ) {
-
-              res.setHeader(
-                headerName,
-                value
-              );
-
-            }
-
-          }
-
-
-          /*
-          -------------------------------------------------
-          Cache thumbnail no Stremio
-          -------------------------------------------------
-          */
-
-          if (
-            !res.getHeader(
-              "Cache-Control"
-            )
-          ) {
-
-            res.setHeader(
-              "Cache-Control",
-              "public, max-age=3600"
-            );
-
-          }
-
-
-          if (
-            req.method ===
-            "HEAD"
-          ) {
-
-            upstreamRes.resume();
-
-            return res.end();
-
-          }
-
-
-          upstreamRes.pipe(
-            res
-          );
-
-
-          upstreamRes.on(
-            "error",
-            error => {
-
-              console.error(
-                "[Thumbnail] Upstream error:",
-                error.message
-              );
-
-
-              if (
-                !res.headersSent
-              ) {
-
-                res.statusCode =
-                  502;
-
-                res.end();
-
-              } else {
-
-                res.destroy();
-
-              }
-
-            }
-          );
-
+          "Referer":
+            `${GOFILE_WEB}/d/${encodeURIComponent(folderId)}`
         }
       );
 
-
-    upstream.on(
-      "timeout",
-      () => {
-
-        console.error(
-          "[Thumbnail] GoFile request timeout"
-        );
-
-
-        upstream.destroy(
-          new Error(
-            "GoFile thumbnail request timeout"
-          )
-        );
-
-      }
-    );
-
-
-    upstream.on(
-      "error",
-      error => {
-
-        console.error(
-          "[Thumbnail] Request error:",
-          error.message
-        );
-
-
-        if (
-          !res.headersSent
-        ) {
-
-          res.statusCode =
-            502;
-
-          res.end(
-            "GoFile thumbnail proxy error"
-          );
-
-        } else {
-
-          res.destroy();
-
-        }
-
-      }
-    );
-
-
-    upstream.end();
-
-
-  } catch (error) {
-
-    console.error(
-      "[Thumbnail] Invalid thumbnail URL:",
-      error.message
-    );
-
-
-    res.statusCode =
-      500;
-
-    res.end(
-      "Invalid GoFile thumbnail URL"
-    );
-
+      return;
+    } catch (_) {}
   }
 
-}
+  if (
+    result.link
+  ) {
+    try {
+      const response =
+        await jsonRequest(
+          "HEAD",
+          result.link,
+          {
+            headers: {
+              "Referer":
+                `${GOFILE_WEB}/d/${encodeURIComponent(folderId)}`
+            }
+          }
+        );
 
+      if (
+        response.status >=
+          200 &&
+        response.status <
+          400
+      ) {
+        /*
+        No thumbnail available.
+        */
+      }
+    } catch (_) {}
+  }
+
+  /*
+  -------------------------------------------------------
+  1x1 transparent GIF
+  -------------------------------------------------------
+  */
+
+  const transparentGif =
+    Buffer.from(
+      "R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==",
+      "base64"
+    );
+
+  res.writeHead(
+    200,
+    {
+      "Content-Type":
+        "image/gif",
+      "Content-Length":
+        transparentGif.length,
+      "Cache-Control":
+        "public, max-age=3600"
+    }
+  );
+
+  res.end(
+    transparentGif
+  );
+}
 
 /*
 =========================================================
- HTTP SERVER
+ URL BUILDER
+=========================================================
+*/
+
+function getRequestBase(
+  req
+) {
+  const forwardedProto =
+    String(
+      req.headers[
+        "x-forwarded-proto"
+      ] ||
+      ""
+    )
+      .split(",")[0]
+      .trim();
+
+  const protocol =
+    forwardedProto ||
+    "https";
+
+  const host =
+    req.headers.host ||
+    "";
+
+  return {
+    protocol,
+    host
+  };
+}
+
+/*
+=========================================================
+ SERVER
 =========================================================
 */
 
@@ -3533,872 +2333,948 @@ const server =
       req,
       res
     ) => {
-
       try {
-
-        const parsed =
+        const parsedUrl =
           new URL(
             req.url,
-            `http://${req.headers.host}`
+            `http://${
+              req.headers.host ||
+              "localhost"
+            }`
           );
 
-
         const pathname =
-          parsed.pathname;
+          parsedUrl.pathname;
 
+        const {
+          folderId,
+          addonPath
+        } =
+          getAddonContext(
+            pathname
+          );
+
+        const activeFolderId =
+          folderId ||
+          GOFILE_FOLDER;
+
+        const addonBasePath =
+          folderId
+            ? `/${encodeURIComponent(
+                folderId
+              )}`
+            : "";
 
         /*
-        ---------------------------------------------------
-        CORS
-        ---------------------------------------------------
-        */
-
-        res.setHeader(
-          "Access-Control-Allow-Origin",
-          "*"
-        );
-
-        res.setHeader(
-          "Access-Control-Allow-Headers",
-          "*"
-        );
-
-
-        /*
-        ---------------------------------------------------
-        OPTIONS
-        ---------------------------------------------------
+        =================================================
+        CORS / OPTIONS
+        =================================================
         */
 
         if (
           req.method ===
           "OPTIONS"
         ) {
+          res.writeHead(
+            204,
+            {
+              "Access-Control-Allow-Origin":
+                "*",
+              "Access-Control-Allow-Methods":
+                "GET,HEAD,OPTIONS",
+              "Access-Control-Allow-Headers":
+                "*"
+            }
+          );
 
-          res.statusCode =
-            204;
-
-          return res.end();
-
+          res.end();
+          return;
         }
 
+        /*
+        =================================================
+        CONFIGURE
+        =================================================
+        */
+
+        if (
+          addonPath ===
+          "/configure"
+        ) {
+          renderConfigurePage(
+            req,
+            res,
+            activeFolderId
+          );
+
+          return;
+        }
+
+        if (
+          pathname ===
+          "/configure"
+        ) {
+          renderConfigurePage(
+            req,
+            res,
+            ""
+          );
+
+          return;
+        }
 
         /*
-        ---------------------------------------------------
+        =================================================
         MANIFEST
-        ---------------------------------------------------
+        =================================================
         */
+
+        if (
+          addonPath ===
+          "/manifest.json"
+        ) {
+          sendJson(
+            res,
+            200,
+            buildManifest(
+              folderId
+            )
+          );
+
+          return;
+        }
 
         if (
           pathname ===
           "/manifest.json"
         ) {
-
-          return sendJson(
+          sendJson(
             res,
-            manifest
+            200,
+            buildManifest(
+              null
+            )
           );
 
+          return;
         }
 
-
         /*
-        ---------------------------------------------------
-        DIAGNOSTIC
-        ---------------------------------------------------
+        =================================================
+        DIAGNOSTICO
+        =================================================
         */
 
         if (
-          pathname ===
+          addonPath ===
           "/diagnostico"
         ) {
+          const cache =
+            folderCache.get(
+              activeFolderId
+            );
 
-          return await diagnostic(
-            res
+          sendJson(
+            res,
+            200,
+            {
+              addon:
+                "ok",
+              folderId:
+                activeFolderId,
+              folderUrl:
+                `${GOFILE_WEB}/d/${activeFolderId}`,
+              sort:
+                GOFILE_SORT,
+              userAgent:
+                USER_AGENT,
+              language:
+                LANGUAGE,
+              cache:
+                cache
+                  ? {
+                      timestamp:
+                        cache.timestamp,
+                      ageMs:
+                        Date.now() -
+                        cache.timestamp,
+                      files:
+                        cache.data &&
+                        cache.data.files
+                          ? cache
+                              .data
+                              .files
+                              .length
+                          : 0
+                    }
+                  : null
+            }
           );
 
+          return;
         }
 
-
         /*
-        ---------------------------------------------------
-        TEST LINK
-        ---------------------------------------------------
+        =================================================
+        TESTE WT
+        =================================================
         */
 
         if (
-          pathname ===
-          "/teste-link"
+          addonPath ===
+          "/teste-wt"
         ) {
-
           try {
-
-            const account =
-              await createAccount();
-
-
-            const websiteToken =
-              await generateWebsiteToken(
-                account.token
+            const info =
+              await getWebsiteTokenSecret(
+                true
               );
 
-
-            const fileId =
-              parsed.searchParams.get(
-                "id"
-              ) ||
-              "a4c4e316-e437-4c67-80a9-b8b42377c893";
-
-
-            const result =
-              await testDirectLink(
-                fileId,
-                account.token,
-                websiteToken
+            const token =
+              await getWebsiteToken(
+                activeFolderId
               );
 
-
-            return sendJson(
+            sendJson(
               res,
-              result
-            );
-
-          } catch (err) {
-
-            return sendJson(
-              res,
+              200,
               {
-
+                ok:
+                  true,
+                folderId:
+                  activeFolderId,
+                scriptUrl:
+                  info.scriptUrl,
+                secretFound:
+                  !!info.secret,
+                token:
+                  token
+              }
+            );
+          } catch (error) {
+            sendJson(
+              res,
+              500,
+              {
                 ok:
                   false,
-
                 error:
-                  err.message
-
-              },
-              500
+                  error.message
+              }
             );
-
           }
 
+          return;
         }
 
-
         /*
-        ---------------------------------------------------
-        TEST FILE
-        ---------------------------------------------------
+        =================================================
+        TESTE LINK
+        =================================================
         */
 
         if (
-          pathname ===
-          "/teste-file"
+          addonPath ===
+          "/teste-link"
         ) {
+          const fileId =
+            parsedUrl.searchParams.get(
+              "file"
+            );
+
+          if (
+            !fileId
+          ) {
+            sendJson(
+              res,
+              400,
+              {
+                error:
+                  "Falta o parâmetro ?file="
+              }
+            );
+
+            return;
+          }
 
           try {
-
-            const account =
-              await createAccount();
-
-
-            const generated =
-              await generateWebsiteToken(
-                account.token
-              );
-
-
-            const fileId =
-              parsed.searchParams.get(
-                "id"
-              ) ||
-              "a4c4e316-e437-4c67-80a9-b8b42377c893";
-
-
             const result =
               await inspectFile(
                 fileId,
-                account.token,
-                generated.token
+                activeFolderId
               );
 
-
-            return sendJson(
+            sendJson(
               res,
+              result.ok
+                ? 200
+                : 404,
               result
             );
-
           } catch (error) {
-
-            return sendJson(
+            sendJson(
               res,
+              500,
               {
-
                 ok:
                   false,
-
                 error:
                   error.message
-
-              },
-              500
+              }
             );
-
           }
 
+          return;
         }
 
-
         /*
-        ---------------------------------------------------
-        FORCE REFRESH
-        ---------------------------------------------------
+        =================================================
+        TESTE FILE
+        =================================================
         */
 
         if (
-          pathname ===
-          "/refresh"
+          addonPath ===
+          "/teste-file"
         ) {
+          const fileId =
+            parsedUrl.searchParams.get(
+              "file"
+            );
 
-          folderCache = {
+          if (
+            !fileId
+          ) {
+            sendJson(
+              res,
+              400,
+              {
+                error:
+                  "Falta o parâmetro ?file="
+              }
+            );
 
-            timestamp:
-              0,
-
-            files:
-              []
-
-          };
-
-
-          return sendJson(
-            res,
-            {
-
-              ok:
-                true,
-
-              message:
-                "Cache cleared"
-
-            }
-          );
-
-        }
-
-
-        /*
-        ---------------------------------------------------
-        TEST WT
-        ---------------------------------------------------
-        */
-
-        if (
-          pathname ===
-          "/teste-wt"
-        ) {
+            return;
+          }
 
           try {
-
-            const account =
-              await createAccount();
-
-
-            const generated =
-              await generateWebsiteToken(
-                account.token
+            const result =
+              await inspectFile(
+                fileId,
+                activeFolderId
               );
 
-
-            return sendJson(
+            sendJson(
               res,
-              {
-
-                ok:
-                  true,
-
-                scriptUrl:
-                  generated.scriptUrl,
-
-                timeWindow:
-                  generated.timeWindow,
-
-                websiteToken:
-                  generated.token,
-
-                websiteTokenPreview:
-                  generated.token.slice(
-                    0,
-                    16
-                  ) + "..."
-
-              }
+              result.ok
+                ? 200
+                : 404,
+              result
             );
-
           } catch (error) {
-
-            return sendJson(
+            sendJson(
               res,
+              500,
               {
-
                 ok:
                   false,
-
                 error:
                   error.message
-
-              },
-              500
+              }
             );
-
           }
 
+          return;
         }
 
-
         /*
-        ===================================================
-        CATALOG
-        ===================================================
+        =================================================
+        REFRESH
+        =================================================
         */
 
-        const catalogMatch =
-          pathname.match(
-            /^\/catalog\/other\/gofile-videos(?:\.json)?$/
+        if (
+          addonPath ===
+          "/refresh"
+        ) {
+          if (
+            folderId
+          ) {
+            folderCache.delete(
+              activeFolderId
+            );
+          } else {
+            folderCache.clear();
+          }
+
+          sendJson(
+            res,
+            200,
+            {
+              ok:
+                true,
+              folderId:
+                activeFolderId,
+              message:
+                "Cache atualizado."
+            }
           );
 
+          return;
+        }
+
+        /*
+        =================================================
+        CATALOG
+        =================================================
+        */
 
         if (
-          catalogMatch
+          addonPath.startsWith(
+            "/catalog/"
+          )
         ) {
+          const parts =
+            addonPath
+              .split("/")
+              .filter(
+                Boolean
+              );
 
-          const files =
-            await loadFolder();
+          /*
+          /catalog/other/gofile-videos.json
+          */
 
+          if (
+            parts.length <
+            3
+          ) {
+            sendJson(
+              res,
+              404,
+              {
+                metas: []
+              }
+            );
 
-          const protocol =
-            req.headers[
-              "x-forwarded-proto"
-            ] ||
-            "https";
+            return;
+          }
 
+          const type =
+            parts[1];
 
-          const host =
-            req.headers.host;
+          const catalogFile =
+            parts[2];
 
+          const catalogId =
+            catalogFile.replace(
+              /\.json$/i,
+              ""
+            );
 
-          const metas =
-            files.map(
-              (
-                file,
-                index
-              ) => {
+          if (
+            type !==
+              "other" ||
+            catalogId !==
+              "gofile-videos"
+          ) {
+            sendJson(
+              res,
+              404,
+              {
+                metas: []
+              }
+            );
 
+            return;
+          }
 
-                let poster =
-                  null;
+          try {
+            const folder =
+              await loadAllFolders(
+                activeFolderId,
+                false
+              );
 
+            const {
+              protocol,
+              host
+            } =
+              getRequestBase(
+                req
+              );
 
-                if (
-                  file.thumbnail
-                ) {
+            const metas =
+              folder.files
+                .filter(
+                  isVideoFile
+                )
+                .map(
+                  file => ({
+                    id:
+                      `gofile:${file.id}`,
+                    type:
+                      "other",
+                    name:
+                      cleanTitle(
+                        file.name
+                      ),
+                    poster:
+                      `${protocol}://${host}${addonBasePath}/thumbnail/${encodeURIComponent(
+                        file.id
+                      )}`
+                  })
+                );
 
-                  poster =
-                    `${protocol}://${host}` +
-                    `/thumbnail/` +
-                    `${encodeURIComponent(
-                      file.id
-                    )}`;
+            sendJson(
+              res,
+              200,
+              {
+                metas
+              }
+            );
+          } catch (error) {
+            sendJson(
+              res,
+              500,
+              {
+                metas: [],
+                error:
+                  error.message
+              }
+            );
+          }
 
-                }
+          return;
+        }
 
+        /*
+        =================================================
+        META
+        =================================================
+        */
 
-                return {
+        if (
+          addonPath.startsWith(
+            "/meta/"
+          )
+        ) {
+          const parts =
+            addonPath
+              .split("/")
+              .filter(
+                Boolean
+              );
 
+          if (
+            parts.length <
+            2
+          ) {
+            sendJson(
+              res,
+              404,
+              {}
+            );
+
+            return;
+          }
+
+          let metaId =
+            parts[1];
+
+          try {
+            metaId =
+              decodeURIComponent(
+                metaId
+              );
+          } catch (_) {}
+
+          metaId =
+            metaId.replace(
+              /^gofile:/i,
+              ""
+            );
+
+          try {
+            const folder =
+              await loadFolder(
+                activeFolderId,
+                false
+              );
+
+            const file =
+              folder.files.find(
+                item =>
+                  String(
+                    item.id
+                  ) ===
+                  String(
+                    metaId
+                  )
+              );
+
+            if (
+              !file
+            ) {
+              sendJson(
+                res,
+                404,
+                {}
+              );
+
+              return;
+            }
+
+            const {
+              protocol,
+              host
+            } =
+              getRequestBase(
+                req
+              );
+
+            sendJson(
+              res,
+              200,
+              {
+                meta: {
                   id:
-                    `gofile:${
-                      file.id ||
-                      index
-                    }`,
-
+                    `gofile:${file.id}`,
                   type:
                     "other",
-
                   name:
-                    removeExtension(
+                    cleanTitle(
                       file.name
                     ),
-
-                  poster
-
-                };
-
-              }
-            );
-
-
-          return sendJson(
-            res,
-            {
-              metas
-            }
-          );
-
-        }
-
-
-        /*
-        ===================================================
-        META
-        ===================================================
-        */
-
-        const metaMatch =
-          pathname.match(
-            /^\/meta\/other\/([^/]+)\.json$/
-          );
-
-
-        if (
-          metaMatch
-        ) {
-
-          const id =
-            decodeURIComponent(
-              metaMatch[1]
-            )
-            .replace(
-              /^gofile:/,
-              ""
-            );
-
-
-          const files =
-            await loadFolder();
-
-
-          const file =
-            files.find(
-              f =>
-                String(f.id) ===
-                String(id)
-            );
-
-
-          if (
-            !file
-          ) {
-
-            return sendJson(
-              res,
-              {
-
-                meta: {
-
-                  id:
-                    `gofile:${id}`,
-
-                  type:
-                    "other",
-
-                  name:
-                    "GoFile Video"
-
+                  poster:
+                    `${protocol}://${host}${addonBasePath}/thumbnail/${encodeURIComponent(
+                      file.id
+                    )}`,
+                  description:
+                    file.name ||
+                    "",
+                  runtime:
+                    file.duration ||
+                    undefined
                 }
-
               }
             );
-
+          } catch (error) {
+            sendJson(
+              res,
+              500,
+              {
+                error:
+                  error.message
+              }
+            );
           }
 
-
-          const protocol =
-            req.headers[
-              "x-forwarded-proto"
-            ] ||
-            "https";
-
-
-          const host =
-            req.headers.host;
-
-
-          const poster =
-            file.thumbnail
-              ? (
-                `${protocol}://${host}` +
-                `/thumbnail/` +
-                `${encodeURIComponent(
-                  file.id
-                )}`
-              )
-              : null;
-
-
-          return sendJson(
-            res,
-            {
-
-              meta: {
-
-                id:
-                  `gofile:${file.id}`,
-
-                type:
-                  "other",
-
-                name:
-                  removeExtension(
-                    file.name
-                  ),
-
-                description:
-                  file.name,
-
-                poster
-
-              }
-
-            }
-          );
-
+          return;
         }
 
-
         /*
-        ===================================================
-        THUMBNAIL PROXY
-        ===================================================
+        =================================================
+        THUMBNAIL
+        =================================================
         */
 
-        const thumbnailMatch =
-          pathname.match(
-            /^\/thumbnail\/([^/]+)$/
-          );
-
-
         if (
-          thumbnailMatch
+          addonPath.startsWith(
+            "/thumbnail/"
+          )
         ) {
-
-          const id =
-            decodeURIComponent(
-              thumbnailMatch[1]
+          const fileId =
+            addonPath.substring(
+              "/thumbnail/".length
             );
 
+          let decodedId =
+            fileId;
 
-          console.log(
-            `[Thumbnail] Requested file: ${id}`
-          );
+          try {
+            decodedId =
+              decodeURIComponent(
+                decodedId
+              );
+          } catch (_) {}
 
-
-          const files =
-            await loadFolder();
-
-
-          const file =
-            files.find(
-              f =>
-                String(f.id) ===
-                String(id)
+          try {
+            await proxyThumbnail(
+              req,
+              res,
+              decodedId,
+              activeFolderId
             );
-
-
-          if (
-            !file
-          ) {
-
-            res.statusCode =
-              404;
-
-            return res.end(
-              "Video not found"
+          } catch (error) {
+            sendJson(
+              res,
+              500,
+              {
+                error:
+                  error.message
+              }
             );
-
           }
 
-
-          return await proxyThumbnail(
-            req,
-            res,
-            file
-          );
-
+          return;
         }
 
-
         /*
-        ===================================================
+        =================================================
         VIDEO PROXY
-        ===================================================
+        =================================================
         */
 
-        const proxyMatch =
-          pathname.match(
-            /^\/proxy\/([^/]+)$/
-          );
-
-
         if (
-          proxyMatch
+          addonPath.startsWith(
+            "/proxy/"
+          )
         ) {
-
-          const id =
-            decodeURIComponent(
-              proxyMatch[1]
+          const fileId =
+            addonPath.substring(
+              "/proxy/".length
             );
 
+          let decodedId =
+            fileId;
 
-          console.log(
-            `[Proxy] Requested file: ${id}`
-          );
+          try {
+            decodedId =
+              decodeURIComponent(
+                decodedId
+              );
+          } catch (_) {}
 
-
-          const files =
-            await loadFolder();
-
-
-          const file =
-            files.find(
-              f =>
-                String(f.id) ===
-                String(id)
+          try {
+            await proxyVideo(
+              req,
+              res,
+              decodedId,
+              activeFolderId
             );
-
-
-          if (
-            !file
-          ) {
-
-            res.statusCode =
-              404;
-
-            return res.end(
-              "Video not found"
+          } catch (error) {
+            sendJson(
+              res,
+              500,
+              {
+                error:
+                  error.message
+              }
             );
-
           }
 
-
-          return await proxyVideo(
-            req,
-            res,
-            file
-          );
-
+          return;
         }
 
-
         /*
-        ===================================================
+        =================================================
         STREAM
-        ===================================================
+        =================================================
         */
 
-        const streamMatch =
-          pathname.match(
-            /^\/stream\/other\/([^/]+)\.json$/
-          );
-
-
         if (
-          streamMatch
+          addonPath.startsWith(
+            "/stream/"
+          )
         ) {
+          const parts =
+            addonPath
+              .split("/")
+              .filter(
+                Boolean
+              );
 
-          const id =
-            decodeURIComponent(
-              streamMatch[1]
-            )
-            .replace(
-              /^gofile:/,
+          if (
+            parts.length <
+            2
+          ) {
+            sendJson(
+              res,
+              404,
+              {
+                streams: []
+              }
+            );
+
+            return;
+          }
+
+          let streamId =
+            parts[1];
+
+          try {
+            streamId =
+              decodeURIComponent(
+                streamId
+              );
+          } catch (_) {}
+
+          streamId =
+            streamId.replace(
+              /^gofile:/i,
               ""
             );
 
+          try {
+            const folder =
+              await loadFolder(
+                activeFolderId,
+                false
+              );
 
-          const files =
-            await loadFolder();
+            const file =
+              folder.files.find(
+                item =>
+                  String(
+                    item.id
+                  ) ===
+                  String(
+                    streamId
+                  )
+              );
 
-
-          const file =
-            files.find(
-              f =>
-                String(f.id) ===
-                String(id)
-            );
-
-
-          if (
-            !file
-          ) {
-
-            return sendJson(
-              res,
-              {
-                streams: []
-              }
-            );
-
-          }
-
-
-          if (
-            !file.link
-          ) {
-
-            return sendJson(
-              res,
-              {
-                streams: []
-              }
-            );
-
-          }
-
-
-          const protocol =
-            req.headers[
-              "x-forwarded-proto"
-            ] ||
-            "https";
-
-
-          const host =
-            req.headers.host;
-
-
-          const proxyUrl =
-            `${protocol}://${host}` +
-            `/proxy/` +
-            `${encodeURIComponent(
-              file.id
-            )}`;
-
-
-          return sendJson(
-            res,
-            {
-
-              streams: [
-
+            if (
+              !file
+            ) {
+              sendJson(
+                res,
+                404,
                 {
-
-                  name:
-                    "GoFile",
-
-                  title:
-                    file.name,
-
-                  url:
-                    proxyUrl,
-
-                  behaviorHints: {
-
-                    notWebReady:
-                      false
-
-                  }
-
+                  streams: []
                 }
+              );
 
-              ]
-
+              return;
             }
-          );
 
+            const {
+              protocol,
+              host
+            } =
+              getRequestBase(
+                req
+              );
+
+            const streamUrl =
+              `${protocol}://${host}${addonBasePath}/proxy/${encodeURIComponent(
+                file.id
+              )}`;
+
+            sendJson(
+              res,
+              200,
+              {
+                streams: [
+                  {
+                    url:
+                      streamUrl,
+                    title:
+                      file.name ||
+                      "GoFile"
+                  }
+                ]
+              }
+            );
+          } catch (error) {
+            sendJson(
+              res,
+              500,
+              {
+                streams: [],
+                error:
+                  error.message
+              }
+            );
+          }
+
+          return;
         }
 
-
         /*
-        ===================================================
+        =================================================
         ROOT
-        ===================================================
+        =================================================
         */
 
         if (
-          pathname === "/" ||
-          pathname === ""
+          pathname ===
+            "/" ||
+          pathname ===
+            ""
         ) {
+          const {
+            protocol,
+            host
+          } =
+            getRequestBase(
+              req
+            );
 
-          return sendJson(
+          const configuredUrl =
+            `${protocol}://${host}/configure`;
+
+          sendText(
             res,
-            {
-
-              addon:
-                "ok",
-
-              name:
-                "GoFile Videos",
-
-              folder:
-                GOFILE_FOLDER,
-
-              sort:
-                GOFILE_SORT,
-
-              manifest:
-                "/manifest.json",
-
-              diagnostic:
-                "/diagnostico",
-
-              testWT:
-                "/teste-wt",
-
-              refresh:
-                "/refresh"
-
-            }
+            200,
+            [
+              "GoFile → Stremio Addon",
+              "",
+              `Folder fallback: ${GOFILE_FOLDER}`,
+              "",
+              `Configuração: ${configuredUrl}`,
+              "",
+              "Para instalar no Stremio, abre /configure."
+            ].join(
+              "\n"
+            )
           );
 
+          return;
         }
 
-
         /*
-        ===================================================
+        =================================================
         NOT FOUND
-        ===================================================
+        =================================================
         */
 
-        return sendJson(
+        sendJson(
           res,
+          404,
           {
-
             error:
-              "notFound"
-
-          },
-          404
+              "Not found"
+          }
         );
-
-
       } catch (error) {
-
         console.error(
-          "[SERVER ERROR]",
+          "REQUEST ERROR:",
           error
         );
 
-
-        return sendJson(
-          res,
-          {
-
-            error:
-              error.message ||
-              "Internal server error"
-
-          },
-          500
-        );
-
+        if (
+          !res.headersSent
+        ) {
+          sendJson(
+            res,
+            500,
+            {
+              error:
+                error.message ||
+                "Internal Server Error"
+            }
+          );
+        } else {
+          res.end();
+        }
       }
-
     }
   );
 
-
 /*
 =========================================================
- START SERVER
+ SERVER START
 =========================================================
 */
 
@@ -4406,13 +3282,12 @@ server.listen(
   PORT,
   "0.0.0.0",
   () => {
-
     console.log(
       "=========================================="
     );
 
     console.log(
-      "GoFile Stremio Addon"
+      "GoFile → Stremio Addon"
     );
 
     console.log(
@@ -4420,7 +3295,7 @@ server.listen(
     );
 
     console.log(
-      `Folder: ${GOFILE_FOLDER}`
+      `Fallback folder: ${GOFILE_FOLDER}`
     );
 
     console.log(
@@ -4428,28 +3303,7 @@ server.listen(
     );
 
     console.log(
-      `Language: ${LANGUAGE}`
-    );
-
-    console.log(
-      `User-Agent: ${USER_AGENT}`
-    );
-
-    console.log(
-      "Dynamic WT enabled"
-    );
-
-    console.log(
-      "Thumbnail proxy enabled"
-    );
-
-    console.log(
-      "Video proxy enabled"
-    );
-
-    console.log(
       "=========================================="
     );
-
   }
 );

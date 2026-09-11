@@ -2692,137 +2692,85 @@ function extractFolderId(value) {
 
 
 async function verifyFolder() {
+  const input = document.getElementById("folder");
+  const button = document.getElementById("verify");
+  const result = document.getElementById("result");
 
-  const input =
-    document.getElementById(
-      "folder"
-    );
-
-  const button =
-    document.getElementById(
-      "verify"
-    );
-
-  const result =
-    document.getElementById(
-      "result"
-    );
-
-
-  const folderId =
-    extractFolderId(
-      input.value
-    );
-
+  const folderId = extractFolderId(input.value);
 
   if (!folderId) {
-
-    result.className =
-      "error";
-
-    result.style.display =
-      "block";
-
-    result.innerHTML =
-      "Introduz um ID ou URL GoFile válido.";
-
+    result.className = "error";
+    result.style.display = "block";
+    result.innerHTML = "Introduz um ID ou URL GoFile válido.";
     return;
-
   }
 
+  button.disabled = true;
+  button.innerText = "A verificar...";
 
-  button.disabled =
-    true;
-
-  button.innerText =
-    "A verificar...";
-
-
-  result.style.display =
-    "block";
-
-  result.className =
-    "";
-
-  result.innerHTML =
-    "A contactar o GoFile...";
-
+  result.style.display = "block";
+  result.className = "";
+  result.innerHTML = "A contactar o servidor...";
 
   try {
+    const url = "/api/check-folder?id=" + encodeURIComponent(folderId);
 
-    const response =
-      await fetch(
-        "/api/check-folder?id=" +
-        encodeURIComponent(
-          folderId
-        )
-      );
+    console.log("A verificar:", url);
 
+    const response = await fetch(url);
 
-    const data =
-      await response.json();
+    console.log("HTTP:", response.status);
 
+    const text = await response.text();
 
-    if (
-      !response.ok ||
-      !data.ok
-    ) {
+    console.log("Resposta:", text);
 
+    let data;
+
+    try {
+      data = JSON.parse(text);
+    } catch (e) {
       throw new Error(
-        data.error ||
-        "Não foi possível verificar a pasta."
+        "O servidor não devolveu JSON. Resposta: " + text.substring(0, 300)
       );
-
     }
 
+    if (!response.ok || !data.ok) {
+      throw new Error(
+        data.error || "Não foi possível verificar a pasta."
+      );
+    }
 
-    selectedFolder =
-      data.folderId;
+    selectedFolder = data.folderId;
 
-
-    result.className =
-      "success";
-
+    result.className = "success";
 
     result.innerHTML =
-      "<strong>✓ Pasta encontrada</strong>" +
+      "<strong>✓ Pasta encontrada</strong><br><br>" +
+      "ID: " + data.folderId + "<br>" +
+      "Vídeos encontrados: " + data.videoCount +
       "<br><br>" +
-      "ID: " +
-      data.folderId +
-      "<br>" +
-      "Vídeos encontrados: " +
-      data.videoCount +
-      "<br><br>" +
-      "<button " +
-      "class='install' " +
-      "onclick='installAddon()'>" +
+      "<button class='install' onclick='installAddon()'>" +
       "Instalar addon no Stremio" +
       "</button>";
 
   } catch (error) {
 
-    selectedFolder =
-      null;
+    console.error("Erro ao verificar pasta:", error);
 
+    selectedFolder = null;
 
-    result.className =
-      "error";
-
+    result.className = "error";
+    result.style.display = "block";
 
     result.innerHTML =
-      "<strong>Erro:</strong> " +
+      "<strong>Erro:</strong><br>" +
       error.message;
 
   } finally {
-
-    button.disabled =
-      false;
-
-    button.innerText =
-      "Verificar pasta";
-
+    button.disabled = false;
+    button.innerText = "Verificar pasta";
   }
-
 }
 
 

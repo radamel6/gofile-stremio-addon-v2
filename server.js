@@ -2827,37 +2827,24 @@ async function verifyFolder() {
 
 
 function installAddon() {
-
-  if (
-    !selectedFolder
-  ) {
-
+  if (!selectedFolder) {
+    alert("Primeiro tens de verificar uma pasta GoFile.");
     return;
-
   }
-
 
   const manifestUrl =
     window.location.origin +
     "/manifest.json?folder=" +
-    encodeURIComponent(
-      selectedFolder
-    );
-
+    encodeURIComponent(selectedFolder);
 
   const stremioUrl =
-    "stremio://" +
-    manifestUrl.replace(
-      /^https?:\\/\\//,
-      ""
-    );
+    manifestUrl.replace(/^https?:\/\//, "stremio://");
 
+  console.log("Manifest URL:", manifestUrl);
+  console.log("Stremio URL:", stremioUrl);
 
-  window.location.href =
-    stremioUrl;
-
+  window.location.href = stremioUrl;
 }
-
 </script>
 
 </body>

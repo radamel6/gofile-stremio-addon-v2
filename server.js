@@ -2830,7 +2830,7 @@ const manifest = {
     "1.3.0",
 
   name:
-    "GoFile Vídeos CL",
+    "GoFile Vídeos Alt",
 
   description:
     "Streams videos from a GoFile folder.",

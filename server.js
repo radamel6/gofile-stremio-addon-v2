@@ -2422,227 +2422,141 @@ async function loadFolder(
 */
 
 function configurationPage() {
-
   return `<!DOCTYPE html>
 <html lang="pt">
 <head>
-
 <meta charset="UTF-8">
-
-<meta
-  name="viewport"
-  content="width=device-width, initial-scale=1.0"
->
-
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>GoFile → Stremio</title>
 
 <style>
-
 * {
   box-sizing: border-box;
 }
 
 body {
-
   margin: 0;
-
   padding: 40px 20px;
-
   background: #111;
-
   color: #fff;
-
-  font-family:
-    Arial,
-    Helvetica,
-    sans-serif;
-
+  font-family: Arial, Helvetica, sans-serif;
 }
 
 .container {
-
   max-width: 600px;
-
   margin: 0 auto;
-
   background: #1d1d1d;
-
   border-radius: 14px;
-
   padding: 30px;
-
-  box-shadow:
-    0 10px 40px
-    rgba(0,0,0,.4);
-
+  box-shadow: 0 10px 40px rgba(0,0,0,.4);
 }
 
 h1 {
-
   margin-top: 0;
-
   font-size: 28px;
-
 }
 
 p {
-
   color: #bbb;
-
   line-height: 1.5;
-
 }
 
 label {
-
   display: block;
-
   margin-top: 25px;
-
   margin-bottom: 8px;
-
   font-weight: bold;
-
 }
 
 input {
-
   width: 100%;
-
   padding: 14px;
-
   border-radius: 8px;
-
   border: 1px solid #444;
-
   background: #111;
-
   color: #fff;
-
   font-size: 16px;
-
 }
 
 button {
-
   width: 100%;
-
   margin-top: 18px;
-
   padding: 14px;
-
   border: 0;
-
   border-radius: 8px;
-
   background: #7b3ff2;
-
   color: #fff;
-
   font-size: 16px;
-
   font-weight: bold;
-
   cursor: pointer;
-
 }
 
 button:hover {
-
   background: #8d58f5;
-
 }
 
 button:disabled {
-
   opacity: .5;
-
   cursor: wait;
-
 }
 
 #result {
-
   margin-top: 20px;
-
   padding: 15px;
-
   border-radius: 8px;
-
   display: none;
-
 }
 
 .success {
-
   background: #173d24;
-
   color: #7dff9d;
-
 }
 
 .error {
-
   background: #421d1d;
-
   color: #ff8c8c;
-
 }
 
 .install {
-
   background: #e67e22;
-
 }
 
 .install:hover {
-
   background: #f39c12;
-
 }
 
 .small {
-
   font-size: 13px;
-
   color: #888;
-
 }
-
 </style>
-
 </head>
 
 <body>
 
 <div class="container">
 
-<h1>
-  GoFile → Stremio
-</h1>
+  <h1>GoFile → Stremio</h1>
 
-<p>
-  Escolhe a pasta GoFile que queres utilizar no addon.
-</p>
+  <p>
+    Escolhe a pasta GoFile que queres utilizar no addon.
+  </p>
 
-<label for="folder">
-  ID ou URL da pasta GoFile
-</label>
+  <label for="folder">
+    ID ou URL da pasta GoFile
+  </label>
 
-<input
-  id="folder"
-  type="text"
-  placeholder="Ex: Hg4qUe ou https://gofile.io/d/Hg4qUe"
-/>
+  <input
+    id="folder"
+    type="text"
+    placeholder="Ex: Hg4qUe ou https://gofile.io/d/Hg4qUe"
+  />
 
-<button
-  id="verify"
-  onclick="verifyFolder()"
->
-  Verificar pasta
-</button>
+  <button id="verify">
+    Verificar pasta
+  </button>
 
-<div id="result"></div>
+  <div id="result"></div>
 
 </div>
 
@@ -2650,58 +2564,67 @@ button:disabled {
 
 let selectedFolder = null;
 
-
 function extractFolderId(value) {
 
-  value =
-    value.trim();
-
+  value = value.trim();
 
   if (!value) {
-
     return null;
-
   }
 
+  // Se foi introduzido um URL GoFile
+  if (value.indexOf("gofile.io/d/") !== -1) {
 
-  const match =
-    value.match(
-      /gofile\\.io\\/d\\/([^/?#]+)/i
-    );
+    let part = value.split("gofile.io/d/")[1];
 
+    if (part) {
+      part = part.split("/")[0];
+      part = part.split("?")[0];
+      part = part.split("#")[0];
 
-  if (match) {
-
-    return match[1];
-
+      if (part) {
+        return part;
+      }
+    }
   }
 
-
-  if (
-    /^[A-Za-z0-9_-]+$/.test(value)
-  ) {
-
+  // Se foi introduzido diretamente o ID
+  if (/^[A-Za-z0-9_-]+$/.test(value)) {
     return value;
-
   }
-
 
   return null;
-
 }
 
 
 async function verifyFolder() {
+
+  console.log("[Config] verifyFolder iniciado");
+
   const input = document.getElementById("folder");
   const button = document.getElementById("verify");
   const result = document.getElementById("result");
 
+  if (!input || !button || !result) {
+
+    console.error("[Config] Elementos da página não encontrados");
+
+    return;
+  }
+
   const folderId = extractFolderId(input.value);
 
+  console.log("[Config] Folder ID:", folderId);
+
   if (!folderId) {
-    result.className = "error";
+
     result.style.display = "block";
-    result.innerHTML = "Introduz um ID ou URL GoFile válido.";
+    result.className = "error";
+
+    result.innerHTML =
+      "<strong>Erro:</strong><br>" +
+      "Introduz um ID ou URL GoFile válido.";
+
     return;
   }
 
@@ -2713,36 +2636,51 @@ async function verifyFolder() {
   result.innerHTML = "A contactar o servidor...";
 
   try {
-    const url = "/api/check-folder?id=" + encodeURIComponent(folderId);
 
-    console.log("A verificar:", url);
+    const url =
+      "/api/check-folder?id=" +
+      encodeURIComponent(folderId);
+
+    console.log("[Config] Pedido:", url);
 
     const response = await fetch(url);
 
-    console.log("HTTP:", response.status);
+    console.log(
+      "[Config] HTTP status:",
+      response.status
+    );
 
     const text = await response.text();
 
-    console.log("Resposta:", text);
+    console.log(
+      "[Config] Resposta:",
+      text
+    );
 
     let data;
 
     try {
+
       data = JSON.parse(text);
-    } catch (e) {
+
+    } catch (parseError) {
+
       throw new Error(
-        "O servidor não devolveu JSON. Resposta: " + text.substring(0, 300)
+        "O servidor não devolveu uma resposta JSON válida."
       );
     }
 
     if (!response.ok || !data.ok) {
+
       throw new Error(
-        data.error || "Não foi possível verificar a pasta."
+        data.error ||
+        "Não foi possível verificar a pasta."
       );
     }
 
     selectedFolder = data.folderId;
 
+    result.style.display = "block";
     result.className = "success";
 
     result.innerHTML =
@@ -2750,33 +2688,60 @@ async function verifyFolder() {
       "ID: " + data.folderId + "<br>" +
       "Vídeos encontrados: " + data.videoCount +
       "<br><br>" +
-      "<button class='install' onclick='installAddon()'>" +
+      "<button id='install'>" +
       "Instalar addon no Stremio" +
       "</button>";
 
+    const installButton =
+      document.getElementById("install");
+
+    if (installButton) {
+
+      installButton.addEventListener(
+        "click",
+        installAddon
+      );
+
+    }
+
   } catch (error) {
 
-    console.error("Erro ao verificar pasta:", error);
+    console.error(
+      "[Config] Erro:",
+      error
+    );
 
     selectedFolder = null;
 
-    result.className = "error";
     result.style.display = "block";
+    result.className = "error";
 
     result.innerHTML =
       "<strong>Erro:</strong><br>" +
       error.message;
 
   } finally {
+
     button.disabled = false;
     button.innerText = "Verificar pasta";
+
   }
 }
 
 
 function installAddon() {
+
+  console.log(
+    "[Config] installAddon:",
+    selectedFolder
+  );
+
   if (!selectedFolder) {
-    alert("Primeiro tens de verificar uma pasta GoFile.");
+
+    alert(
+      "Primeiro tens de verificar uma pasta GoFile."
+    );
+
     return;
   }
 
@@ -2786,18 +2751,67 @@ function installAddon() {
     encodeURIComponent(selectedFolder);
 
   const stremioUrl =
-    manifestUrl.replace(/^https?:\/\//, "stremio://");
+    manifestUrl.replace(
+      /^https?:\\/\\//,
+      "stremio://"
+    );
 
-  console.log("Manifest URL:", manifestUrl);
-  console.log("Stremio URL:", stremioUrl);
+  console.log(
+    "[Config] Manifest:",
+    manifestUrl
+  );
+
+  console.log(
+    "[Config] Stremio:",
+    stremioUrl
+  );
 
   window.location.href = stremioUrl;
 }
+
+
+/*
+====================================================
+LIGAR O BOTÃO DEPOIS DE A PÁGINA CARREGAR
+====================================================
+*/
+
+document.addEventListener(
+  "DOMContentLoaded",
+  function() {
+
+    console.log(
+      "[Config] Página carregada"
+    );
+
+    const verifyButton =
+      document.getElementById("verify");
+
+    if (!verifyButton) {
+
+      console.error(
+        "[Config] Botão Verificar não encontrado"
+      );
+
+      return;
+    }
+
+    verifyButton.addEventListener(
+      "click",
+      verifyFolder
+    );
+
+    console.log(
+      "[Config] Botão Verificar ligado"
+    );
+
+  }
+);
+
 </script>
 
 </body>
 </html>`;
-
 }
 
 

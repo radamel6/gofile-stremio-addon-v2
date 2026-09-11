@@ -2526,7 +2526,7 @@ const manifest = {
         "gofile-videos",
 
       name:
-        "GoFile Vídeos CL"
+        "GoFile Vídeos UCL"
 
     }
 

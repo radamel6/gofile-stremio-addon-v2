@@ -72,10 +72,7 @@ const REQUEST_TIMEOUT =
 =========================================================
 */
 
-let folderCache = {
-  timestamp: 0,
-  files: []
-};
+const folderCache = new Map();
 
 let guestAccountCache = {
   token: null,
@@ -1523,7 +1520,8 @@ async function getContentsWithRetry(
 async function getFileLink(
   fileId,
   accountToken,
-  websiteToken
+  websiteToken,
+  folderId = GOFILE_FOLDER
 ) {
 
   const url =
@@ -1555,7 +1553,7 @@ async function getFileLink(
             "application/json",
 
           "Referer":
-            `${GOFILE_WEB}/d/${GOFILE_FOLDER}`,
+            ``${GOFILE_WEB}/d/${folderId}`,
 
           "Origin":
             GOFILE_WEB
@@ -1726,7 +1724,7 @@ async function inspectFile(
             "application/json",
 
           "Referer":
-            `${GOFILE_WEB}/d/${GOFILE_FOLDER}`,
+            `${GOFILE_WEB}/d/${activeFolderId}`,
 
           "Origin":
             GOFILE_WEB
@@ -2296,30 +2294,31 @@ function sortFiles(
 */
 
 async function loadFolder(
+  folderId = GOFILE_FOLDER,
   force = false
 ) {
 
   const now =
     Date.now();
 
+  const cached =
+    folderCache.get(folderId);
 
   if (
     !force &&
-    folderCache.timestamp &&
-    now -
-      folderCache.timestamp
-      <
-      CACHE_TIME &&
-    folderCache.files.length
+    cached &&
+    cached.timestamp &&
+    now - cached.timestamp < CACHE_TIME &&
+    cached.files.length
   ) {
 
-    return folderCache.files;
+    return cached.files;
 
   }
 
 
   console.log(
-    `[GoFile] Loading folder ${GOFILE_FOLDER}`
+    `[GoFile] Loading folder ${folderId}`
   );
 
 
@@ -2349,7 +2348,7 @@ async function loadFolder(
 
   const contents =
     await getContentsWithRetry(
-      GOFILE_FOLDER,
+      folderId,
       account.token,
       generated.token
     );
@@ -2374,15 +2373,6 @@ async function loadFolder(
       );
 
 
-    /*
-    -------------------------------------------------------
-    The folder API often returns:
-    "link": true
-
-    Therefore we query the individual file endpoint.
-    -------------------------------------------------------
-    */
-
     if (
       !file.link
     ) {
@@ -2391,7 +2381,8 @@ async function loadFolder(
         await getFileLink(
           file.id,
           account.token,
-          generated.token
+          generated.token,
+          folderId
         );
 
 
@@ -2416,13 +2407,6 @@ async function loadFolder(
     }
 
 
-    /*
-    -------------------------------------------------------
-    If metadata already exists in folder response,
-    keep it. Otherwise individual endpoint filled it.
-    -------------------------------------------------------
-    */
-
     if (
       file.link
     ) {
@@ -2442,12 +2426,6 @@ async function loadFolder(
   }
 
 
-  /*
-  -------------------------------------------------------
-  SORT
-  -------------------------------------------------------
-  */
-
   const sortedFiles =
     sortFiles(
       files
@@ -2464,21 +2442,21 @@ async function loadFolder(
   );
 
 
-  folderCache = {
+  folderCache.set(
+    folderId,
+    {
+      timestamp:
+        now,
 
-    timestamp:
-      now,
-
-    files:
-      sortedFiles
-
-  };
+      files:
+        sortedFiles
+    }
+  );
 
 
   return sortedFiles;
 
 }
-
 
 /*
 =========================================================
@@ -2486,67 +2464,97 @@ async function loadFolder(
 =========================================================
 */
 
-const manifest = {
+function buildManifest(
+  folderId = null
+) {
 
-  id:
-    "com.andre.gofile",
+  const configured =
+    !!folderId;
 
-  version:
-    "1.2.0",
 
-  name:
-    "GoFile Vídeos CL",
+  return {
 
-  description:
-    "Streams videos from a GoFile folder.",
+    id:
+      "com.andre.gofile",
 
-  logo:
-    "https://gofile.io/dist/img/favicon.png",
+    version:
+      "1.3.0",
 
-  resources: [
+    name:
+      "GoFile Vídeos CL",
 
-    "catalog",
-    "meta",
-    "stream"
+    description:
+      "Streams videos from a GoFile folder.",
 
-  ],
+    logo:
+      "https://gofile.io/dist/img/favicon.png",
 
-  types: [
-    "other"
-  ],
+    resources: [
 
-  catalogs: [
+      "catalog",
+      "meta",
+      "stream"
 
-    {
+    ],
 
-      type:
-        "other",
+    types: [
+      "other"
+    ],
 
-      id:
-        "gofile-videos",
+    catalogs: [
 
-      name:
-        "GoFile Vídeos UCL"
+      {
 
-    }
+        type:
+          "other",
 
-  ],
+        id:
+          "gofile-videos",
 
-  idPrefixes: [
-    "gofile:"
-  ],
+        name:
+          "GoFile Vídeos UCL"
 
-  behaviorHints: {
+      }
 
-    configurable:
-      true,
+    ],
 
-    configurationRequired:
-      false
+    idPrefixes: [
+      "gofile:"
+    ],
 
-  }
+    behaviorHints: {
 
-};
+      configurable:
+        true,
+
+      configurationRequired:
+        !configured
+
+    },
+
+    config: [
+
+      {
+
+        key:
+          "gofile_folder",
+
+        type:
+          "text",
+
+        title:
+          "ID ou URL da pasta GoFile",
+
+        required:
+          true
+
+      }
+
+    ]
+
+  };
+
+}
 
 
 /*
@@ -2626,7 +2634,7 @@ async function diagnostic(
       GOFILE_FOLDER,
 
     folderUrl:
-      `${GOFILE_WEB}/d/${GOFILE_FOLDER}`,
+      `${GOFILE_WEB}/d/${activeFolderId}`,
 
     sort:
       GOFILE_SORT,
@@ -2932,7 +2940,7 @@ async function proxyVideo(
       LANGUAGE,
 
     "Referer":
-      `${GOFILE_WEB}/d/${GOFILE_FOLDER}`,
+      `${GOFILE_WEB}/d/${activeFolderId}`,
 
     "Origin":
       GOFILE_WEB,
@@ -3278,7 +3286,7 @@ async function proxyThumbnail(
       LANGUAGE,
 
     "Referer":
-      `${GOFILE_WEB}/d/${GOFILE_FOLDER}`,
+      `${GOFILE_WEB}/d/${activeFolderId}`,
 
     "Origin":
       GOFILE_WEB,
@@ -3520,6 +3528,763 @@ async function proxyThumbnail(
 
 }
 
+/*
+=========================================================
+ CONFIGURATION
+=========================================================
+*/
+
+function normalizeFolderId(
+  value
+) {
+
+  if (
+    !value
+  ) {
+
+    return null;
+
+  }
+
+
+  let folder =
+    String(
+      value
+    )
+    .trim();
+
+
+  /*
+  -------------------------------------------------------
+  Accept full GoFile URL
+  -------------------------------------------------------
+  */
+
+  try {
+
+    if (
+      /^https?:\/\//i.test(
+        folder
+      )
+    ) {
+
+      const url =
+        new URL(
+          folder
+        );
+
+
+      const parts =
+        url.pathname
+          .split("/")
+          .filter(
+            Boolean
+          );
+
+
+      const index =
+        parts.indexOf(
+          "d"
+        );
+
+
+      if (
+        index >= 0 &&
+        parts[index + 1]
+      ) {
+
+        folder =
+          parts[index + 1];
+
+      }
+
+    }
+
+  } catch (_) {}
+
+
+  try {
+
+    folder =
+      decodeURIComponent(
+        folder
+      );
+
+  } catch (_) {}
+
+
+  folder =
+    folder
+      .replace(
+        /^\/+|\/+$/g,
+        ""
+      )
+      .trim();
+
+
+  if (
+    !folder
+  ) {
+
+    return null;
+
+  }
+
+
+  /*
+  -------------------------------------------------------
+  Only accept a single folder ID
+  -------------------------------------------------------
+  */
+
+  if (
+    folder === "." ||
+    folder === ".." ||
+    folder.includes("/") ||
+    folder.includes("\\")
+  ) {
+
+    return null;
+
+  }
+
+
+  return folder;
+
+}
+
+
+/*
+=========================================================
+ ADDON URL CONTEXT
+=========================================================
+*/
+
+function getAddonContext(
+  pathname
+) {
+
+  const match =
+    pathname.match(
+      /^\/([^/]+)(\/.*)$/
+    );
+
+
+  if (
+    !match
+  ) {
+
+    return {
+
+      folderId:
+        null,
+
+      addonPath:
+        pathname
+
+    };
+
+  }
+
+
+  const candidate =
+    normalizeFolderId(
+      match[1]
+    );
+
+
+  const rest =
+    match[2];
+
+
+  const validRoute =
+
+    rest ===
+      "/manifest.json" ||
+
+    rest ===
+      "/configure" ||
+
+    rest ===
+      "/diagnostico" ||
+
+    rest ===
+      "/refresh" ||
+
+    rest ===
+      "/teste-link" ||
+
+    rest ===
+      "/teste-file" ||
+
+    rest ===
+      "/teste-wt" ||
+
+    rest.startsWith(
+      "/catalog/"
+    ) ||
+
+    rest.startsWith(
+      "/meta/"
+    ) ||
+
+    rest.startsWith(
+      "/thumbnail/"
+    ) ||
+
+    rest.startsWith(
+      "/proxy/"
+    ) ||
+
+    rest.startsWith(
+      "/stream/"
+    );
+
+
+  if (
+    candidate &&
+    validRoute
+  ) {
+
+    return {
+
+      folderId:
+        candidate,
+
+      addonPath:
+        rest
+
+    };
+
+  }
+
+
+  return {
+
+    folderId:
+      null,
+
+    addonPath:
+      pathname
+
+  };
+
+}
+
+
+/*
+=========================================================
+ HTML ESCAPE
+=========================================================
+*/
+
+function escapeHtml(
+  value
+) {
+
+  return String(
+    value || ""
+  )
+  .replace(
+    /&/g,
+    "&amp;"
+  )
+  .replace(
+    /</g,
+    "&lt;"
+  )
+  .replace(
+    />/g,
+    "&gt;"
+  )
+  .replace(
+    /"/g,
+    "&quot;"
+  )
+  .replace(
+    /'/g,
+    "&#039;"
+  );
+
+}
+
+
+/*
+=========================================================
+ CONFIGURATION PAGE
+=========================================================
+*/
+
+async function renderConfigurePage(
+  req,
+  res,
+  currentFolder = ""
+) {
+
+  const parsed =
+    new URL(
+      req.url,
+      `http://${req.headers.host}`
+    );
+
+
+  const folderInput =
+    parsed.searchParams.get(
+      "folder"
+    ) ||
+    currentFolder ||
+    "";
+
+
+  const action =
+    parsed.searchParams.get(
+      "action"
+    );
+
+
+  let validation = null;
+
+
+  /*
+  -------------------------------------------------------
+  Validate folder
+  -------------------------------------------------------
+  */
+
+  if (
+    action === "validate" &&
+    folderInput
+  ) {
+
+    const folderId =
+      normalizeFolderId(
+        folderInput
+      );
+
+
+    if (
+      !folderId
+    ) {
+
+      validation = {
+
+        ok:
+          false,
+
+        error:
+          "ID ou URL da pasta inválido."
+
+      };
+
+    } else {
+
+      try {
+
+        console.log(
+          `[Configure] Validating folder ${folderId}`
+        );
+
+
+        const files =
+          await loadFolder(
+            folderId,
+            true
+          );
+
+
+        validation = {
+
+          ok:
+            true,
+
+          folderId,
+
+          count:
+            files.length
+
+        };
+
+
+      } catch (error) {
+
+        console.error(
+          "[Configure] Folder validation failed:",
+          error
+        );
+
+
+        validation = {
+
+          ok:
+            false,
+
+          error:
+            error.message ||
+            "Não foi possível validar a pasta."
+
+        };
+
+      }
+
+    }
+
+  }
+
+
+  const host =
+    req.headers.host;
+
+
+  const protocol =
+    req.headers[
+      "x-forwarded-proto"
+    ] ||
+    "https";
+
+
+  let installUrl =
+    null;
+
+
+  if (
+    validation &&
+    validation.ok
+  ) {
+
+    installUrl =
+      `stremio://${host}/` +
+      `${encodeURIComponent(
+        validation.folderId
+      )}/manifest.json`;
+
+  }
+
+
+  const message =
+    validation
+      ? validation.ok
+        ? `
+          <div class="success">
+            <strong>✓ Pasta encontrada</strong>
+            <div class="details">
+              ID: ${escapeHtml(
+                validation.folderId
+              )}
+            </div>
+            <div class="videos">
+              🎬 ${validation.count}
+              vídeos disponíveis
+            </div>
+          </div>
+        `
+        : `
+          <div class="error">
+            <strong>✕ Não foi possível validar a pasta</strong>
+            <div class="details">
+              ${escapeHtml(
+                validation.error
+              )}
+            </div>
+          </div>
+        `
+      : "";
+
+
+  const installButton =
+    installUrl
+      ? `
+        <a
+          class="install"
+          href="${escapeHtml(
+            installUrl
+          )}"
+        >
+          Instalar no Stremio
+        </a>
+      `
+      : "";
+
+
+  const html = `<!DOCTYPE html>
+
+<html lang="pt">
+
+<head>
+
+<meta charset="UTF-8">
+
+<meta
+  name="viewport"
+  content="width=device-width, initial-scale=1.0"
+>
+
+<title>
+  GoFile Vídeos CL
+</title>
+
+<style>
+
+body {
+
+  margin: 0;
+
+  padding: 40px 20px;
+
+  background: #111;
+
+  color: #eee;
+
+  font-family:
+    Arial,
+    sans-serif;
+
+}
+
+.container {
+
+  max-width: 600px;
+
+  margin: 0 auto;
+
+  background: #1c1c1c;
+
+  padding: 30px;
+
+  border-radius: 12px;
+
+  box-sizing: border-box;
+
+}
+
+h1 {
+
+  margin-top: 0;
+
+}
+
+p {
+
+  color: #bbb;
+
+  line-height: 1.5;
+
+}
+
+label {
+
+  display: block;
+
+  margin-bottom: 8px;
+
+  font-weight: bold;
+
+}
+
+input {
+
+  width: 100%;
+
+  box-sizing: border-box;
+
+  padding: 14px;
+
+  border-radius: 8px;
+
+  border: 1px solid #444;
+
+  background: #111;
+
+  color: #fff;
+
+  font-size: 16px;
+
+  margin-bottom: 15px;
+
+}
+
+button,
+.install {
+
+  display: block;
+
+  width: 100%;
+
+  box-sizing: border-box;
+
+  padding: 14px;
+
+  border: 0;
+
+  border-radius: 8px;
+
+  font-size: 16px;
+
+  font-weight: bold;
+
+  text-align: center;
+
+  text-decoration: none;
+
+  cursor: pointer;
+
+}
+
+button {
+
+  background: #555;
+
+  color: white;
+
+}
+
+.install {
+
+  margin-top: 15px;
+
+  background: #8b5cf6;
+
+  color: white;
+
+}
+
+.success {
+
+  margin-top: 20px;
+
+  padding: 18px;
+
+  border-radius: 8px;
+
+  background: #173b25;
+
+  border: 1px solid #28633d;
+
+}
+
+.success strong {
+
+  color: #6ee7a0;
+
+}
+
+.error {
+
+  margin-top: 20px;
+
+  padding: 18px;
+
+  border-radius: 8px;
+
+  background: #421b1b;
+
+  border: 1px solid #743131;
+
+}
+
+.error strong {
+
+  color: #ff8585;
+
+}
+
+.details {
+
+  margin-top: 10px;
+
+  color: #ccc;
+
+  word-break: break-word;
+
+}
+
+.videos {
+
+  margin-top: 12px;
+
+  font-size: 18px;
+
+  font-weight: bold;
+
+}
+
+</style>
+
+</head>
+
+<body>
+
+<div class="container">
+
+<h1>
+  GoFile Vídeos CL
+</h1>
+
+<p>
+  Escolhe a pasta GoFile que queres utilizar
+  neste addon.
+</p>
+
+<form
+  method="GET"
+  action="/configure"
+>
+
+<input
+  type="text"
+  name="folder"
+  value="${escapeHtml(
+    folderInput
+  )}"
+  placeholder="Ex.: xOZ1Mzd3 ou https://gofile.io/d/xOZ1Mzd3"
+  required
+>
+
+<input
+  type="hidden"
+  name="action"
+  value="validate"
+>
+
+<button
+  type="submit"
+>
+  Validar pasta
+</button>
+
+</form>
+
+${message}
+
+${installButton}
+
+</div>
+
+</body>
+
+</html>`;
+
+
+  res.statusCode =
+    200;
+
+
+  res.setHeader(
+    "Content-Type",
+    "text/html; charset=utf-8"
+  );
+
+
+  res.setHeader(
+    "Cache-Control",
+    "no-store"
+  );
+
+
+  res.end(
+    html
+  );
+
+}
 
 /*
 =========================================================
@@ -3545,6 +4310,25 @@ const server =
 
         const pathname =
           parsed.pathname;
+
+       const {
+  folderId,
+  addonPath
+} =
+  getAddonContext(
+    pathname
+  );
+
+
+const activeFolderId =
+  folderId ||
+  GOFILE_FOLDER;
+
+
+const addonBasePath =
+  folderId
+    ? `/${encodeURIComponent(folderId)}`
+    : "";
 
 
         /*
@@ -3582,6 +4366,19 @@ const server =
 
         }
 
+       if (
+  addonPath ===
+  "/configure"
+) {
+
+  return await renderConfigurePage(
+    req,
+    res,
+    activeFolderId
+  );
+
+}
+
 
         /*
         ---------------------------------------------------
@@ -3589,17 +4386,19 @@ const server =
         ---------------------------------------------------
         */
 
-        if (
-          pathname ===
-          "/manifest.json"
-        ) {
+       if (
+  addonPath ===
+  "/manifest.json"
+) {
 
-          return sendJson(
-            res,
-            manifest
-          );
+  return sendJson(
+    res,
+    buildManifest(
+      folderId
+    )
+  );
 
-        }
+}
 
 
         /*
@@ -3872,7 +4671,9 @@ const server =
         ) {
 
           const files =
-            await loadFolder();
+  await loadFolder(
+    activeFolderId
+  );
 
 
           const protocol =
@@ -3973,7 +4774,9 @@ const server =
 
 
           const files =
-            await loadFolder();
+  await loadFolder(
+    activeFolderId
+  );
 
 
           const file =
@@ -4092,8 +4895,9 @@ const server =
 
 
           const files =
-            await loadFolder();
-
+  await loadFolder(
+    activeFolderId
+  );
 
           const file =
             files.find(
@@ -4154,7 +4958,9 @@ const server =
 
 
           const files =
-            await loadFolder();
+  await loadFolder(
+    activeFolderId
+  );
 
 
           const file =
@@ -4215,7 +5021,9 @@ const server =
 
 
           const files =
-            await loadFolder();
+  await loadFolder(
+    activeFolderId
+  );
 
 
           const file =

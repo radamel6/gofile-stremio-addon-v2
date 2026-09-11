@@ -9,302 +9,163 @@ const { URL } = require("url");
  GOFILE → STREMIO ADDON
 =========================================================
 
-Para mudar de pasta GoFile:
+Este addon:
 
-Render Environment Variable:
-GOFILE_FOLDER=Hg4qUe
+- lê uma pasta GoFile
+- cria uma conta guest GoFile
+- carrega os conteúdos da pasta
+- resolve links dos ficheiros
+- fornece catálogo ao Stremio
+- fornece metadata
+- fornece streams
+- faz proxy de vídeos
+- faz proxy de thumbnails
+- executa dinamicamente o wt.obf.js do GoFile
+- permite escolher a pasta GoFile através da configuração
+  do próprio addon no Stremio
+
+CONFIGURAÇÃO
+
+A variável GOFILE_FOLDER funciona como fallback.
 
 Exemplo:
-https://gofile.io/d/Hg4qUe
-                     ^^^^^^
 
-ORDENAÇÃO:
+GOFILE_FOLDER=Hg4qUe
 
-GOFILE_SORT=name_asc
-GOFILE_SORT=name_desc
-GOFILE_SORT=date_desc
-GOFILE_SORT=date_asc
+Mas o utilizador pode instalar o addon através de:
+
+https://SEU-HOST/configure
+
+e escolher outra pasta.
+
+Nesse caso o ID da pasta passa no próprio caminho do addon:
+
+/Hg4qUe/manifest.json
+/Hg4qUe/catalog/...
+/Hg4qUe/meta/...
+/Hg4qUe/stream/...
+/Hg4qUe/thumbnail/...
+/Hg4qUe/proxy/...
+
+Assim diferentes instalações podem utilizar diferentes
+pastas GoFile sem alterar variáveis de ambiente globais.
 =========================================================
 */
 
 const PORT =
-  Number(process.env.PORT || 10000);
+  Number(process.env.PORT) || 3000;
 
 const GOFILE_FOLDER =
-  process.env.GOFILE_FOLDER || "xOZ1Mzd3";
+  process.env.GOFILE_FOLDER || "Hg4qUe";
 
 const GOFILE_SORT =
-  process.env.GOFILE_SORT || "name_asc";
+  process.env.GOFILE_SORT || "date_desc";
 
-const GOFILE_API =
-  "https://api.gofile.io";
+const LANGUAGE =
+  process.env.LANGUAGE || "en-US";
+
+const USER_AGENT =
+  process.env.USER_AGENT ||
+  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
 const GOFILE_WEB =
   "https://gofile.io";
 
-const USER_AGENT =
-  process.env.GOFILE_USER_AGENT ||
-  process.env.USER_AGENT ||
-  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 " +
-  "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+const GOFILE_API =
+  "https://api.gofile.io";
 
-const LANGUAGE =
-  process.env.GOFILE_LANGUAGE ||
-  process.env.LANGUAGE ||
-  "en-US";
-
-const CACHE_TIME =
-  5 * 60 * 1000;
-
-const ACCOUNT_CACHE_TIME =
-  30 * 60 * 1000;
-
-const WT_SECRET_CACHE_TIME =
-  12 * 60 * 60 * 1000;
-
-const REQUEST_TIMEOUT =
-  30000;
+const WT_URL =
+  "https://gofile.io/dist/js/wt.obf.js";
 
 
 /*
 =========================================================
- GLOBAL CACHE
+ FOLDERS
 =========================================================
 */
 
-let folderCache = {
-  timestamp: 0,
-  files: []
-};
+const FOLDERS = [
+  {
+    name: "GoFile Videos",
+    id: GOFILE_FOLDER,
+    catalogId: "gofile-videos"
+  }
+];
 
-let guestAccountCache = {
-  token: null,
-  timestamp: 0
-};
-
-let websiteTokenSecretCache = {
-  secret: null,
-  scriptUrl: null,
-  timestamp: 0
-};
-
-let websiteTokenSecretPromise = null;
-
-
-/*
-=========================================================
- HTTP REQUEST
-=========================================================
-*/
-
-function request(
-  method,
-  targetUrl,
-  options = {}
-) {
-
-  return new Promise(
-    (resolve, reject) => {
-
-      let url;
-
-      try {
-
-        url =
-          new URL(targetUrl);
-
-      } catch (error) {
-
-        reject(error);
-        return;
-
-      }
-
-      const headers = {
-
-        "User-Agent":
-          USER_AGENT,
-
-        "Accept-Language":
-          LANGUAGE,
-
-        "Accept":
-          "application/json, text/plain, */*",
-
-        "Connection":
-          "close",
-
-        ...(options.headers || {})
-
-      };
-
-
-      const req =
-        https.request(
-          {
-
-            protocol:
-              url.protocol,
-
-            hostname:
-              url.hostname,
-
-            port:
-              url.port || 443,
-
-            path:
-              url.pathname +
-              url.search,
-
-            method,
-
-            headers,
-
-            family:
-              4,
-
-            timeout:
-              options.timeout ||
-              REQUEST_TIMEOUT
-
-          },
-
-          res => {
-
-            let body = "";
-
-            res.setEncoding(
-              "utf8"
-            );
-
-            res.on(
-              "data",
-              chunk => {
-                body += chunk;
-              }
-            );
-
-            res.on(
-              "end",
-              () => {
-
-                resolve({
-
-                  status:
-                    res.statusCode || 0,
-
-                  headers:
-                    res.headers || {},
-
-                  body
-
-                });
-
-              }
-            );
-
-          }
-        );
-
-
-      req.on(
-        "timeout",
-        () => {
-
-          req.destroy(
-            new Error(
-              `Request timeout after ${
-                options.timeout ||
-                REQUEST_TIMEOUT
-              }ms`
-            )
-          );
-
-        }
-      );
-
-
-      req.on(
-        "error",
-        reject
-      );
-
-
-      if (
-        options.body
-      ) {
-
-        req.write(
-          options.body
-        );
-
-      }
-
-
-      req.end();
-
-    }
+const FOLDER_BY_CATALOG =
+  new Map(
+    FOLDERS.map(folder => [
+      folder.catalogId,
+      folder
+    ])
   );
 
-}
-
 
 /*
 =========================================================
- JSON REQUEST
+ GENERIC HELPERS
 =========================================================
 */
 
-async function jsonRequest(
-  method,
-  url,
-  options = {}
+function sendJson(
+  res,
+  data,
+  statusCode = 200
 ) {
-
-  const response =
-    await request(
-      method,
-      url,
-      options
-    );
-
-
-  let data = null;
-
-
-  try {
-
-    data =
-      JSON.parse(
-        response.body
-      );
-
-  } catch (_) {
-
-    data = null;
-
+  if (res.headersSent) {
+    return;
   }
 
+  res.statusCode = statusCode;
 
-  return {
+  res.setHeader(
+    "Content-Type",
+    "application/json; charset=utf-8"
+  );
 
-    ...response,
+  res.setHeader(
+    "Cache-Control",
+    "no-store"
+  );
 
-    data
-
-  };
-
+  res.end(
+    JSON.stringify(
+      data,
+      null,
+      2
+    )
+  );
 }
 
 
-/*
-=========================================================
- SLEEP
-=========================================================
-*/
+function sendText(
+  res,
+  text,
+  statusCode = 200
+) {
+  if (res.headersSent) {
+    return;
+  }
+
+  res.statusCode = statusCode;
+
+  res.setHeader(
+    "Content-Type",
+    "text/plain; charset=utf-8"
+  );
+
+  res.setHeader(
+    "Cache-Control",
+    "no-store"
+  );
+
+  res.end(
+    text
+  );
+}
+
 
 function sleep(ms) {
-
   return new Promise(
     resolve =>
       setTimeout(
@@ -312,7 +173,368 @@ function sleep(ms) {
         ms
       )
   );
+}
 
+
+function safeJsonParse(
+  value,
+  fallback = null
+) {
+  try {
+    return JSON.parse(value);
+  } catch (_) {
+    return fallback;
+  }
+}
+
+
+function getRequestUrl(req) {
+  const host =
+    req.headers.host ||
+    "localhost";
+
+  const protocol =
+    req.headers["x-forwarded-proto"] ||
+    "http";
+
+  return new URL(
+    req.url,
+    `${protocol}://${host}`
+  );
+}
+
+
+function getQueryParam(
+  url,
+  name
+) {
+  return url.searchParams.get(name);
+}
+
+
+/*
+=========================================================
+ HTTP REQUEST HELPER
+=========================================================
+*/
+
+function requestRaw(
+  targetUrl,
+  options = {}
+) {
+  return new Promise(
+    (resolve, reject) => {
+
+      let parsed;
+
+      try {
+        parsed =
+          new URL(targetUrl);
+      } catch (error) {
+        reject(error);
+        return;
+      }
+
+      const isHttps =
+        parsed.protocol === "https:";
+
+      const transport =
+        isHttps
+          ? https
+          : http;
+
+      const requestOptions = {
+        method:
+          options.method ||
+          "GET",
+
+        hostname:
+          parsed.hostname,
+
+        port:
+          parsed.port ||
+          (isHttps ? 443 : 80),
+
+        path:
+          `${parsed.pathname}${parsed.search}`,
+
+        headers:
+          options.headers || {},
+
+        timeout:
+          options.timeout ||
+          30000
+      };
+
+      const req =
+        transport.request(
+          requestOptions,
+          res => {
+
+            const chunks = [];
+
+            res.on(
+              "data",
+              chunk =>
+                chunks.push(chunk)
+            );
+
+            res.on(
+              "end",
+              () => {
+
+                const body =
+                  Buffer.concat(
+                    chunks
+                  );
+
+                resolve({
+                  statusCode:
+                    res.statusCode,
+
+                  headers:
+                    res.headers,
+
+                  body
+                });
+              }
+            );
+          }
+        );
+
+      req.on(
+        "error",
+        reject
+      );
+
+      req.on(
+        "timeout",
+        () => {
+          req.destroy(
+            new Error(
+              "Request timeout"
+            )
+          );
+        }
+      );
+
+      if (options.body) {
+        req.write(
+          options.body
+        );
+      }
+
+      req.end();
+    }
+  );
+}
+
+
+async function requestText(
+  targetUrl,
+  options = {}
+) {
+  const result =
+    await requestRaw(
+      targetUrl,
+      options
+    );
+
+  return {
+    ...result,
+    text:
+      result.body.toString(
+        "utf8"
+      )
+  };
+}
+
+
+async function requestJson(
+  targetUrl,
+  options = {}
+) {
+  const result =
+    await requestText(
+      targetUrl,
+      options
+    );
+
+  return {
+    ...result,
+    json:
+      safeJsonParse(
+        result.text
+      )
+  };
+}
+
+
+/*
+=========================================================
+ GOFILE WT
+=========================================================
+*/
+
+let wtSource = null;
+let wtContext = null;
+let wtLoadedAt = 0;
+
+const WT_CACHE_MS =
+  60 * 60 * 1000;
+
+
+async function loadWtScript(
+  force = false
+) {
+
+  if (
+    !force &&
+    wtSource &&
+    Date.now() - wtLoadedAt <
+      WT_CACHE_MS
+  ) {
+    return wtSource;
+  }
+
+  console.log(
+    "[WT] Downloading:",
+    WT_URL
+  );
+
+  const result =
+    await requestText(
+      WT_URL,
+      {
+        timeout: 30000,
+        headers: {
+          "User-Agent":
+            USER_AGENT,
+          "Accept":
+            "*/*",
+          "Accept-Language":
+            LANGUAGE,
+          "Referer":
+            GOFILE_WEB + "/"
+        }
+      }
+    );
+
+  if (
+    result.statusCode < 200 ||
+    result.statusCode >= 300
+  ) {
+    throw new Error(
+      `Unable to download WT script. HTTP ${result.statusCode}`
+    );
+  }
+
+  wtSource =
+    result.text;
+
+  wtLoadedAt =
+    Date.now();
+
+  console.log(
+    "[WT] Script downloaded:",
+    wtSource.length,
+    "bytes"
+  );
+
+  return wtSource;
+}
+
+
+async function ensureWtContext(
+  force = false
+) {
+
+  if (
+    !force &&
+    wtContext
+  ) {
+    return wtContext;
+  }
+
+  const source =
+    await loadWtScript(
+      force
+    );
+
+  const sandbox = {
+    console,
+    setTimeout,
+    clearTimeout,
+    setInterval,
+    clearInterval,
+
+    TextEncoder:
+      global.TextEncoder,
+
+    TextDecoder:
+      global.TextDecoder,
+
+    URL,
+
+    crypto: {
+      getRandomValues:
+        array => {
+          const bytes =
+            crypto.randomBytes(
+              array.length
+            );
+
+          array.set(bytes);
+          return array;
+        }
+    }
+  };
+
+  sandbox.global =
+    sandbox;
+
+  sandbox.window =
+    sandbox;
+
+  sandbox.self =
+    sandbox;
+
+  sandbox.globalThis =
+    sandbox;
+
+  wtContext =
+    vm.createContext(
+      sandbox
+    );
+
+  try {
+    new vm.Script(
+      source,
+      {
+        filename:
+          "wt.obf.js"
+      }
+    ).runInContext(
+      wtContext,
+      {
+        timeout:
+          30000
+      }
+    );
+  } catch (error) {
+
+    console.error(
+      "[WT] Script execution error:",
+      error
+    );
+
+    wtContext =
+      null;
+
+    throw error;
+  }
+
+  return wtContext;
 }
 
 
@@ -322,437 +544,1328 @@ function sleep(ms) {
 =========================================================
 */
 
+let accountCache = null;
+let accountCacheAt = 0;
+
+const ACCOUNT_CACHE_MS =
+  30 * 60 * 1000;
+
+
 async function createAccount(
   force = false
 ) {
 
-  const now =
-    Date.now();
-
-
   if (
     !force &&
-    guestAccountCache.token &&
-    now -
-      guestAccountCache.timestamp
-      <
-      ACCOUNT_CACHE_TIME
+    accountCache &&
+    Date.now() - accountCacheAt <
+      ACCOUNT_CACHE_MS
   ) {
-
-    return {
-      token:
-        guestAccountCache.token
-    };
-
+    return accountCache;
   }
 
-
   console.log(
-    "[GoFile] Creating guest account..."
+    "[Account] Creating GoFile guest account..."
   );
 
-
-  let response =
-    await jsonRequest(
-      "POST",
+  const result =
+    await requestJson(
       `${GOFILE_API}/accounts`,
       {
+        method:
+          "POST",
+
+        timeout:
+          30000,
 
         headers: {
+          "User-Agent":
+            USER_AGENT,
+
+          "Accept":
+            "application/json",
 
           "Content-Type":
             "application/json",
 
-          "Origin":
-            GOFILE_WEB,
-
-          "Referer":
-            `${GOFILE_WEB}/`
-
+          "Accept-Language":
+            LANGUAGE
         },
 
         body:
           JSON.stringify({})
-
       }
     );
 
-
-  /*
-  -------------------------------------------------------
-  If GoFile requires WT
-  -------------------------------------------------------
-  */
-
   if (
-    !response.data ||
-    response.data.status !== "ok" ||
-    !response.data.data ||
-    !response.data.data.token
+    result.statusCode < 200 ||
+    result.statusCode >= 300
   ) {
-
-    try {
-
-      const wt =
-        await generateWebsiteToken("");
-
-      console.log(
-        "[GoFile] Retrying account creation with WT"
-      );
-
-
-      response =
-        await jsonRequest(
-          "POST",
-          `${GOFILE_API}/accounts`,
-          {
-
-            headers: {
-
-              "Content-Type":
-                "application/json",
-
-              "Origin":
-                GOFILE_WEB,
-
-              "Referer":
-                `${GOFILE_WEB}/`,
-
-              "X-Website-Token":
-                wt,
-
-              "X-BL":
-                LANGUAGE
-
-            },
-
-            body:
-              JSON.stringify({})
-
-          }
-        );
-
-
-    } catch (error) {
-
-      console.log(
-        "[GoFile] WT account retry failed:",
-        error.message
-      );
-
-    }
-
-  }
-
-
-  if (
-    !response.data
-  ) {
-
     throw new Error(
-      `GoFile account returned HTTP ${
-        response.status
-      }: ${
-        response.body.slice(
-          0,
-          1000
-        )
-      }`
+      `GoFile account creation failed. HTTP ${result.statusCode}`
     );
-
   }
 
+  const json =
+    result.json;
 
   if (
-    response.data.status !== "ok" ||
-    !response.data.data ||
-    !response.data.data.token
+    !json
   ) {
-
     throw new Error(
-      `GoFile account error: ${
-        JSON.stringify(
-          response.data
-        )
-      }`
+      "GoFile account creation returned invalid JSON"
     );
-
   }
 
+  let token =
+    null;
 
-  const token =
-    response.data.data.token;
+  if (
+    json.data &&
+    json.data.token
+  ) {
+    token =
+      json.data.token;
+  }
 
+  if (
+    json.token
+  ) {
+    token =
+      json.token;
+  }
 
-  guestAccountCache = {
+  if (
+    !token
+  ) {
+    throw new Error(
+      "GoFile account token not found"
+    );
+  }
 
-    token,
-
-    timestamp:
-      Date.now()
-
+  accountCache = {
+    token
   };
 
+  accountCacheAt =
+    Date.now();
 
   console.log(
-    "[GoFile] Guest account created"
+    "[Account] Guest account created"
   );
 
-
-  return {
-
-    token,
-
-    raw:
-      response.data
-
-  };
-
+  return accountCache;
 }
 
 
 /*
 =========================================================
- DISCOVER WT SCRIPT
+ GOFILE API
 =========================================================
 */
 
-async function discoverWebsiteTokenScript() {
+async function gofileApi(
+  path,
+  options = {}
+) {
 
-  const knownUrls = [
+  const account =
+    await createAccount();
 
-    `${GOFILE_WEB}/js/wt.obf.js`,
+  const headers = {
+    "User-Agent":
+      USER_AGENT,
 
-    `${GOFILE_WEB}/dist/js/wt.obf.js`,
+    "Accept":
+      "application/json",
 
-    `${GOFILE_WEB}/dist/js/wt.js`
+    "Accept-Language":
+      LANGUAGE,
 
-  ];
+    "Cookie":
+      `accountToken=${account.token}`,
 
+    ...(options.headers || {})
+  };
+
+  const url =
+    `${GOFILE_API}${path}`;
+
+  const result =
+    await requestJson(
+      url,
+      {
+        ...options,
+        headers
+      }
+    );
+
+  if (
+    result.statusCode === 401 ||
+    result.statusCode === 403
+  ) {
+
+    console.log(
+      "[Account] Token rejected. Recreating account..."
+    );
+
+    await createAccount(
+      true
+    );
+
+    const newAccount =
+      accountCache;
+
+    const retryHeaders = {
+      "User-Agent":
+        USER_AGENT,
+
+      "Accept":
+        "application/json",
+
+      "Accept-Language":
+        LANGUAGE,
+
+      "Cookie":
+        `accountToken=${newAccount.token}`,
+
+      ...(options.headers || {})
+    };
+
+    return await requestJson(
+      url,
+      {
+        ...options,
+        headers:
+          retryHeaders
+      }
+    );
+  }
+
+  return result;
+}
+
+
+/*
+=========================================================
+ FOLDER CACHE
+=========================================================
+*/
+
+const folderCache =
+  new Map();
+
+
+const fileLinkCache =
+  new Map();
+
+
+const inspectCache =
+  new Map();
+
+
+/*
+=========================================================
+ GET FOLDER CONTENTS
+=========================================================
+*/
+
+async function getContents(
+  folderId
+) {
+
+  if (!folderId) {
+    throw new Error(
+      "Missing GoFile folder ID"
+    );
+  }
+
+  const endpoint =
+    `/contents/${encodeURIComponent(folderId)}?wt=true`;
+
+  console.log(
+    "[GoFile] Loading folder:",
+    folderId
+  );
+
+  const result =
+    await gofileApi(
+      endpoint,
+      {
+        method:
+          "GET",
+
+        timeout:
+          30000
+      }
+    );
+
+  if (
+    result.statusCode < 200 ||
+    result.statusCode >= 300
+  ) {
+    throw new Error(
+      `GoFile contents failed. HTTP ${result.statusCode}`
+    );
+  }
+
+  if (
+    !result.json
+  ) {
+    throw new Error(
+      "GoFile contents returned invalid JSON"
+    );
+  }
+
+  return result.json;
+}
+
+
+async function getContentsWithRetry(
+  folderId
+) {
 
   try {
 
-    console.log(
-      "[GoFile] Inspecting homepage for WT script..."
+    return await getContents(
+      folderId
     );
-
-
-    const page =
-      await request(
-        "GET",
-        `${GOFILE_WEB}/`,
-        {
-
-          headers: {
-
-            "Accept":
-              "text/html,application/xhtml+xml," +
-              "application/xml;q=0.9,*/*;q=0.8",
-
-            "Referer":
-              `${GOFILE_WEB}/`
-
-          },
-
-          timeout:
-            20000
-
-        }
-      );
-
-
-    if (
-      page.status >= 200 &&
-      page.status < 300 &&
-      page.body
-    ) {
-
-      const html =
-        page.body;
-
-
-      const scriptRegex =
-        /<script[^>]+src=["']([^"']*wt[^"']*\.js(?:\?[^"']*)?)["'][^>]*>/gi;
-
-
-      let match;
-
-
-      while (
-        (match =
-          scriptRegex.exec(html))
-      ) {
-
-        let src =
-          match[1];
-
-
-        if (
-          !src
-        ) {
-
-          continue;
-
-        }
-
-
-        try {
-
-          const absolute =
-            new URL(
-              src,
-              GOFILE_WEB
-            ).toString();
-
-
-          console.log(
-            `[GoFile] WT script discovered: ${absolute}`
-          );
-
-
-          return absolute;
-
-        } catch (_) {}
-
-      }
-
-
-      const looseRegex =
-        /["']([^"']*wt[^"']*\.js(?:\?[^"']*)?)["']/gi;
-
-
-      while (
-        (match =
-          looseRegex.exec(html))
-      ) {
-
-        let src =
-          match[1];
-
-
-        if (
-          !src ||
-          !src.includes("wt")
-        ) {
-
-          continue;
-
-        }
-
-
-        try {
-
-          const absolute =
-            new URL(
-              src,
-              GOFILE_WEB
-            ).toString();
-
-
-          console.log(
-            `[GoFile] WT script found (loose): ${absolute}`
-          );
-
-
-          return absolute;
-
-        } catch (_) {}
-
-      }
-
-    }
 
   } catch (error) {
 
-    console.log(
-      "[GoFile] Homepage discovery failed:",
+    console.error(
+      "[GoFile] Contents request failed:",
       error.message
     );
 
+    await sleep(
+      1000
+    );
+
+    return await getContents(
+      folderId
+    );
+  }
+}
+
+
+/*
+=========================================================
+ LOAD FOLDER
+=========================================================
+*/
+
+async function loadFolder(
+  folderId = GOFILE_FOLDER,
+  force = false
+) {
+
+  if (!folderId) {
+    throw new Error(
+      "No GoFile folder configured"
+    );
   }
 
+  if (
+    !force &&
+    folderCache.has(
+      folderId
+    )
+  ) {
 
-  for (
-    const url of knownUrls
+    return folderCache.get(
+      folderId
+    );
+  }
+
+  console.log(
+    "[Folder] Loading:",
+    folderId
+  );
+
+  const data =
+    await getContentsWithRetry(
+      folderId
+    );
+
+  const files = [];
+
+  function walk(
+    node
+  ) {
+
+    if (!node) {
+      return;
+    }
+
+    if (
+      Array.isArray(node)
+    ) {
+
+      for (
+        const item of node
+      ) {
+        walk(item);
+      }
+
+      return;
+    }
+
+    if (
+      typeof node !==
+      "object"
+    ) {
+      return;
+    }
+
+    if (
+      Array.isArray(
+        node.children
+      )
+    ) {
+
+      for (
+        const child of
+        node.children
+      ) {
+        walk(child);
+      }
+    }
+
+    if (
+      node.type === "file" ||
+      node.type === "video"
+    ) {
+
+      files.push(
+        node
+      );
+    }
+  }
+
+  if (
+    data &&
+    data.data
+  ) {
+
+    if (
+      data.data.children
+    ) {
+      walk(
+        data.data.children
+      );
+    } else {
+      walk(
+        data.data
+      );
+    }
+
+  } else {
+
+    walk(data);
+  }
+
+  const result = {
+    folderId,
+    data,
+    files,
+    loadedAt:
+      Date.now()
+  };
+
+  folderCache.set(
+    folderId,
+    result
+  );
+
+  console.log(
+    "[Folder] Loaded:",
+    folderId,
+    "files:",
+    files.length
+  );
+
+  return result;
+}
+
+
+async function loadAllFolders(
+  folderId = GOFILE_FOLDER,
+  force = false
+) {
+  return await loadFolder(
+    folderId,
+    force
+  );
+}
+
+
+/*
+=========================================================
+ FILE HELPERS
+=========================================================
+*/
+
+function getFileId(
+  file
+) {
+  if (!file) {
+    return null;
+  }
+
+  return (
+    file.id ||
+    file.fileId ||
+    file.file_id ||
+    null
+  );
+}
+
+
+function getFileName(
+  file
+) {
+  if (!file) {
+    return "Video";
+  }
+
+  return (
+    file.name ||
+    file.filename ||
+    file.fileName ||
+    "Video"
+  );
+}
+
+
+function isVideoFile(
+  file
+) {
+
+  if (!file) {
+    return false;
+  }
+
+  const name =
+    getFileName(file)
+      .toLowerCase();
+
+  const mime =
+    String(
+      file.mimetype ||
+      file.mimeType ||
+      file.type ||
+      ""
+    ).toLowerCase();
+
+  const videoExtensions = [
+    ".mp4",
+    ".mkv",
+    ".avi",
+    ".mov",
+    ".wmv",
+    ".webm",
+    ".m4v",
+    ".ts",
+    ".m2ts",
+    ".flv",
+    ".mpeg",
+    ".mpg"
+  ];
+
+  if (
+    videoExtensions.some(
+      ext =>
+        name.endsWith(ext)
+    )
+  ) {
+    return true;
+  }
+
+  if (
+    mime.startsWith(
+      "video/"
+    )
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+
+function getFileThumbnail(
+  file
+) {
+
+  if (!file) {
+    return null;
+  }
+
+  return (
+    file.thumbnail ||
+    file.thumbnailUrl ||
+    file.thumbnail_url ||
+    file.preview ||
+    null
+  );
+}
+
+
+function sortFiles(
+  files
+) {
+
+  const cloned =
+    [...files];
+
+  if (
+    GOFILE_SORT ===
+    "name_asc"
+  ) {
+
+    cloned.sort(
+      (a, b) =>
+        getFileName(a)
+          .localeCompare(
+            getFileName(b),
+            undefined,
+            {
+              numeric: true,
+              sensitivity:
+                "base"
+            }
+          )
+    );
+
+  } else if (
+    GOFILE_SORT ===
+    "name_desc"
+  ) {
+
+    cloned.sort(
+      (a, b) =>
+        getFileName(b)
+          .localeCompare(
+            getFileName(a),
+            undefined,
+            {
+              numeric: true,
+              sensitivity:
+                "base"
+            }
+          )
+    );
+
+  } else {
+
+    cloned.sort(
+      (a, b) => {
+
+        const ad =
+          new Date(
+            a.createTime ||
+            a.createdAt ||
+            a.modTime ||
+            0
+          ).getTime();
+
+        const bd =
+          new Date(
+            b.createTime ||
+            b.createdAt ||
+            b.modTime ||
+            0
+          ).getTime();
+
+        if (
+          GOFILE_SORT ===
+          "date_asc"
+        ) {
+          return ad - bd;
+        }
+
+        return bd - ad;
+      }
+    );
+  }
+
+  return cloned;
+}
+
+
+/*
+=========================================================
+ FILE LINK RESOLUTION
+=========================================================
+*/
+
+async function getFileLink(
+  file,
+  folderId = GOFILE_FOLDER,
+  force = false
+) {
+
+  const fileId =
+    getFileId(file);
+
+  if (!fileId) {
+    throw new Error(
+      "File ID not found"
+    );
+  }
+
+  const cacheKey =
+    `${folderId}:${fileId}`;
+
+  if (
+    !force &&
+    fileLinkCache.has(
+      cacheKey
+    )
+  ) {
+    return fileLinkCache.get(
+      cacheKey
+    );
+  }
+
+  const account =
+    await createAccount();
+
+  const headers = {
+    "User-Agent":
+      USER_AGENT,
+
+    "Accept":
+      "*/*",
+
+    "Accept-Language":
+      LANGUAGE,
+
+    "Referer":
+      `${GOFILE_WEB}/d/${folderId}`,
+
+    "Origin":
+      GOFILE_WEB,
+
+    "Cookie":
+      `accountToken=${account.token}`,
+
+    "Connection":
+      "close"
+  };
+
+  let link =
+    file.link ||
+    file.downloadPage ||
+    file.downloadUrl ||
+    file.url ||
+    null;
+
+  if (
+    !link
   ) {
 
     try {
 
-      console.log(
-        `[GoFile] Testing WT script: ${url}`
-      );
+      const endpoint =
+        `/download/${encodeURIComponent(fileId)}`;
 
-
-      const response =
-        await request(
-          "GET",
-          url,
+      const result =
+        await requestRaw(
+          `${GOFILE_API}${endpoint}`,
           {
-
-            headers: {
-
-              "Accept":
-                "application/javascript," +
-                "text/javascript,*/*;q=0.8",
-
-              "Referer":
-                `${GOFILE_WEB}/`
-
-            },
-
+            method:
+              "GET",
+            headers,
             timeout:
-              20000
-
+              30000
           }
         );
 
+      const location =
+        result.headers &&
+        result.headers.location;
 
       if (
-        response.status >= 200 &&
-        response.status < 300 &&
-        response.body &&
-        response.body.length > 100
+        location
       ) {
-
-        console.log(
-          `[GoFile] WT script available: ${url}`
-        );
-
-
-        return {
-
-          url,
-
-          body:
-            response.body
-
-        };
-
+        link =
+          location;
       }
-
-
-      console.log(
-        `[GoFile] WT script ${url} -> HTTP ${
-          response.status
-        }`
-      );
-
 
     } catch (error) {
 
-      console.log(
-        `[GoFile] WT script failed ${url}: ${
-          error.message
-        }`
+      console.error(
+        "[FileLink] Download endpoint failed:",
+        error.message
       );
-
     }
-
   }
 
+  if (
+    !link
+  ) {
 
-  return null;
+    const wt =
+      await ensureWtContext();
 
+    /*
+     * Algumas versões do wt.obf.js
+     * expõem funções diferentes.
+     *
+     * Mantemos a tentativa de descobrir
+     * automaticamente a função disponível.
+     */
+
+    const candidates = [
+      "getDownloadLink",
+      "getFileLink",
+      "download",
+      "resolve",
+      "getDirectLink"
+    ];
+
+    for (
+      const name of
+      candidates
+    ) {
+
+      try {
+
+        const fn =
+          wt[name];
+
+        if (
+          typeof fn !==
+          "function"
+        ) {
+          continue;
+        }
+
+        const result =
+          await fn(
+            fileId,
+            account.token
+          );
+
+        if (
+          typeof result ===
+          "string"
+        ) {
+          link =
+            result;
+          break;
+        }
+
+        if (
+          result &&
+          typeof result.url ===
+            "string"
+        ) {
+          link =
+            result.url;
+          break;
+        }
+
+      } catch (_) {}
+    }
+  }
+
+  if (
+    !link
+  ) {
+
+    throw new Error(
+      `Unable to resolve GoFile link for file ${fileId}`
+    );
+  }
+
+  fileLinkCache.set(
+    cacheKey,
+    link
+  );
+
+  return link;
+}
+
+
+/*
+=========================================================
+ INSPECT FILE
+=========================================================
+*/
+
+async function inspectFile(
+  file,
+  folderId = GOFILE_FOLDER,
+  force = false
+) {
+
+  const fileId =
+    getFileId(file);
+
+  if (!fileId) {
+    throw new Error(
+      "Missing file ID"
+    );
+  }
+
+  const cacheKey =
+    `${folderId}:${fileId}`;
+
+  if (
+    !force &&
+    inspectCache.has(
+      cacheKey
+    )
+  ) {
+    return inspectCache.get(
+      cacheKey
+    );
+  }
+
+  let link =
+    null;
+
+  try {
+
+    link =
+      await getFileLink(
+        file,
+        folderId,
+        force
+      );
+
+  } catch (error) {
+
+    console.error(
+      "[Inspect] Unable to resolve file:",
+      fileId,
+      error.message
+    );
+  }
+
+  const result = {
+    id:
+      fileId,
+
+    name:
+      getFileName(file),
+
+    thumbnail:
+      getFileThumbnail(file),
+
+    link,
+
+    raw:
+      file
+  };
+
+  inspectCache.set(
+    cacheKey,
+    result
+  );
+
+  return result;
+}
+
+
+/*
+=========================================================
+ VIDEO PROXY
+=========================================================
+*/
+
+async function proxyVideo(
+  req,
+  res,
+  file,
+  folderId = GOFILE_FOLDER
+) {
+
+  let targetUrl;
+
+  try {
+
+    targetUrl =
+      await getFileLink(
+        file,
+        folderId
+      );
+
+  } catch (error) {
+
+    console.error(
+      "[Proxy] Unable to resolve file:",
+      error.message
+    );
+
+    res.statusCode =
+      502;
+
+    return res.end(
+      "Unable to resolve GoFile video"
+    );
+  }
+
+  try {
+
+    const parsed =
+      new URL(
+        targetUrl
+      );
+
+    const isHttps =
+      parsed.protocol ===
+      "https:";
+
+    const transport =
+      isHttps
+        ? https
+        : http;
+
+    const headers = {
+      "User-Agent":
+        USER_AGENT,
+
+      "Accept":
+        "*/*",
+
+      "Accept-Language":
+        LANGUAGE,
+
+      "Referer":
+        `${GOFILE_WEB}/d/${folderId}`,
+
+      "Origin":
+        GOFILE_WEB,
+
+      "Connection":
+        "close"
+    };
+
+    if (
+      req.headers.range
+    ) {
+
+      headers.Range =
+        req.headers.range;
+    }
+
+    const requestOptions = {
+      method:
+        req.method ===
+        "HEAD"
+          ? "HEAD"
+          : "GET",
+
+      hostname:
+        parsed.hostname,
+
+      port:
+        parsed.port ||
+        (isHttps ? 443 : 80),
+
+      path:
+        `${parsed.pathname}${parsed.search}`,
+
+      headers,
+
+      timeout:
+        60000
+    };
+
+    const upstream =
+      transport.request(
+        requestOptions,
+        upstreamRes => {
+
+          const copyHeaders = [
+            "content-type",
+            "content-length",
+            "accept-ranges",
+            "content-range",
+            "cache-control",
+            "etag",
+            "last-modified"
+          ];
+
+          for (
+            const headerName of
+            copyHeaders
+          ) {
+
+            const value =
+              upstreamRes.headers[
+                headerName
+              ];
+
+            if (
+              value !== undefined
+            ) {
+
+              res.setHeader(
+                headerName,
+                value
+              );
+            }
+          }
+
+          if (
+            !res.getHeader(
+              "Content-Type"
+            )
+          ) {
+
+            res.setHeader(
+              "Content-Type",
+              "video/mp4"
+            );
+          }
+
+          if (
+            upstreamRes.statusCode ===
+            206
+          ) {
+
+            res.statusCode =
+              206;
+
+          } else if (
+            upstreamRes.statusCode
+          ) {
+
+            res.statusCode =
+              upstreamRes.statusCode;
+          }
+
+          if (
+            req.method ===
+            "HEAD"
+          ) {
+
+            upstreamRes.resume();
+
+            return res.end();
+          }
+
+          upstreamRes.pipe(
+            res
+          );
+
+          upstreamRes.on(
+            "error",
+            error => {
+
+              console.error(
+                "[Proxy] Upstream stream error:",
+                error.message
+              );
+
+              if (
+                !res.headersSent
+              ) {
+
+                res.statusCode =
+                  502;
+
+                res.end();
+
+              } else {
+
+                res.destroy();
+              }
+            }
+          );
+        }
+      );
+
+    upstream.on(
+      "timeout",
+      () => {
+
+        console.error(
+          "[Proxy] GoFile request timeout"
+        );
+
+        upstream.destroy(
+          new Error(
+            "GoFile video request timeout"
+          )
+        );
+      }
+    );
+
+    upstream.on(
+      "error",
+      error => {
+
+        console.error(
+          "[Proxy] GoFile request error:",
+          error.message
+        );
+
+        if (
+          !res.headersSent
+        ) {
+
+          res.statusCode =
+            502;
+
+          res.end(
+            "GoFile proxy error"
+          );
+
+        } else {
+
+          res.destroy();
+        }
+      }
+    );
+
+    upstream.end();
+
+  } catch (error) {
+
+    console.error(
+      "[Proxy] Invalid video URL:",
+      error.message
+    );
+
+    res.statusCode =
+      500;
+
+    res.end(
+      "Invalid GoFile video URL"
+    );
+  }
+}
+
+      tokenConfigured:
+        true,
+
+      error:
+        err.message
+    };
+  }
+}
+
+
+/*
+=========================================================
+ WEBSITE TOKEN DISCOVERY
+=========================================================
+*/
+
+let websiteTokenSecretCache = {
+  secret:
+    null,
+
+  scriptUrl:
+    null,
+
+  timestamp:
+    0
+};
+
+let websiteTokenSecretPromise =
+  null;
+
+const WT_SECRET_CACHE_TIME =
+  4 * 60 * 60 * 1000;
+
+
+async function discoverWebsiteTokenScript() {
+
+  const response =
+    await request(
+      "GET",
+      `${GOFILE_WEB}/`,
+      {
+        headers: {
+          "User-Agent":
+            USER_AGENT,
+
+          "Accept":
+            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+
+          "Accept-Language":
+            LANGUAGE
+        },
+
+        timeout:
+          20000
+      }
+    );
+
+  if (
+    response.status < 200 ||
+    response.status >= 300
+  ) {
+
+    throw new Error(
+      `GoFile homepage HTTP ${response.status}`
+    );
+  }
+
+  const html =
+    response.body ||
+    "";
+
+  const patterns = [
+
+    /<script[^>]+src=["']([^"']*wt\.obf\.js[^"']*)["']/i,
+
+    /<script[^>]+src=["']([^"']*wt[^"']*\.js[^"']*)["']/i,
+
+    /["']([^"']*wt\.obf\.js[^"']*)["']/i
+
+  ];
+
+  for (
+    const pattern of
+    patterns
+  ) {
+
+    const match =
+      html.match(
+        pattern
+      );
+
+    if (
+      !match ||
+      !match[1]
+    ) {
+      continue;
+    }
+
+    let scriptUrl =
+      match[1];
+
+    try {
+
+      scriptUrl =
+        new URL(
+          scriptUrl,
+          GOFILE_WEB
+        ).toString();
+
+    } catch (_) {
+      continue;
+    }
+
+    console.log(
+      "[GoFile] WT script discovered:",
+      scriptUrl
+    );
+
+    return scriptUrl;
+  }
+
+  throw new Error(
+    "Unable to discover wt.obf.js from GoFile homepage"
+  );
 }
 
 
@@ -766,101 +1879,85 @@ function extractWebsiteTokenSecret(
   script
 ) {
 
-  let rawHashInput;
+  if (
+    !script ||
+    typeof script !==
+      "string"
+  ) {
 
+    throw new Error(
+      "Invalid WT script"
+    );
+  }
 
-  const probeUserAgent =
-    "HydraGofileUserAgent";
-
-  const probeLanguage =
-    "HydraGofileLanguage";
+  /*
+   * Executamos o script dentro de um
+   * contexto isolado e interceptamos
+   * o input utilizado pela função
+   * generateWT().
+   */
 
   const probeToken =
-    "HydraGofileToken";
+    "gofile_probe_token";
 
+  const probeUserAgent =
+    USER_AGENT;
 
-  const navigator = {
+  const probeLanguage =
+    LANGUAGE;
 
-    userAgent:
-      probeUserAgent,
-
-    language:
-      probeLanguage,
-
-    languages: [
-      probeLanguage
-    ]
-
-  };
-
-
-  const contextObject = {
-
-    appdata: {},
-
-    console: {
-
-      log: () => {},
-      warn: () => {},
-      error: () => {}
-
-    },
-
-    crypto:
-      crypto.webcrypto,
-
-    Date,
-
-    Math,
-
-    URL,
-
-    URLSearchParams,
-
-    TextEncoder,
-
-    TextDecoder,
-
-    setTimeout,
-
-    clearTimeout,
-
-    navigator,
-
-    window: {
-
-      crypto:
-        crypto.webcrypto,
-
-      navigator,
-
-      location: {
-
-        hostname:
-          "gofile.io",
-
-        href:
-          "https://gofile.io/",
-
-        search:
-          ""
-
-      }
-
-    }
-
-  };
-
+  let rawHashInput =
+    null;
 
   const context =
-    vm.createContext(
-      contextObject,
-      {
-        name:
-          "gofile-website-token"
-      }
-    );
+    vm.createContext({
 
+      console,
+
+      setTimeout,
+
+      clearTimeout,
+
+      setInterval,
+
+      clearInterval,
+
+      URL,
+
+      TextEncoder:
+        global.TextEncoder,
+
+      TextDecoder:
+        global.TextDecoder,
+
+      crypto: {
+        getRandomValues:
+          array => {
+
+            const bytes =
+              crypto.randomBytes(
+                array.length
+              );
+
+            array.set(bytes);
+
+            return array;
+          }
+      }
+
+    });
+
+  context.global =
+    context;
+
+  context.window =
+    context;
+
+  context.self =
+    context;
+
+  context.globalThis =
+    context;
 
   try {
 
@@ -869,7 +1966,7 @@ function extractWebsiteTokenSecret(
       context,
       {
         timeout:
-          3000
+          10000
       }
     );
 
@@ -880,7 +1977,6 @@ function extractWebsiteTokenSecret(
         error.message
       }`
     );
-
   }
 
 
@@ -892,7 +1988,6 @@ function extractWebsiteTokenSecret(
     throw new Error(
       "generateWT function was not found in wt.obf.js"
     );
-
   }
 
 
@@ -903,8 +1998,16 @@ function extractWebsiteTokenSecret(
     rawHashInput =
       String(input);
 
-    return "0".repeat(64);
+    /*
+     * O hash real não é necessário
+     * nesta fase.
+     *
+     * Queremos apenas capturar
+     * o texto que o WT tenta
+     * enviar para SHA-256.
+     */
 
+    return "0".repeat(64);
   };
 
 
@@ -928,7 +2031,6 @@ function extractWebsiteTokenSecret(
         error.message
       }`
     );
-
   }
 
 
@@ -939,7 +2041,6 @@ function extractWebsiteTokenSecret(
     throw new Error(
       "generateWT did not call _sha256"
     );
-
   }
 
 
@@ -962,7 +2063,6 @@ function extractWebsiteTokenSecret(
         250
       )
     );
-
   }
 
 
@@ -973,7 +2073,9 @@ function extractWebsiteTokenSecret(
 
 
   const parts =
-    remainder.split("::");
+    remainder.split(
+      "::"
+    );
 
 
   if (
@@ -983,7 +2085,6 @@ function extractWebsiteTokenSecret(
     throw new Error(
       "Unable to extract WT secret"
     );
-
   }
 
 
@@ -1001,7 +2102,6 @@ function extractWebsiteTokenSecret(
     throw new Error(
       "GoFile WT secret is empty"
     );
-
   }
 
 
@@ -1011,7 +2111,6 @@ function extractWebsiteTokenSecret(
 
 
   return secret;
-
 }
 
 
@@ -1044,7 +2143,6 @@ async function getWebsiteTokenSecret() {
         websiteTokenSecretCache.scriptUrl
 
     };
-
   }
 
 
@@ -1053,7 +2151,6 @@ async function getWebsiteTokenSecret() {
   ) {
 
     return websiteTokenSecretPromise;
-
   }
 
 
@@ -1071,7 +2168,6 @@ async function getWebsiteTokenSecret() {
         throw new Error(
           "Unable to obtain Gofile wt.obf.js"
         );
-
       }
 
 
@@ -1115,7 +2211,6 @@ async function getWebsiteTokenSecret() {
 
               timeout:
                 20000
-
             }
           );
 
@@ -1130,13 +2225,11 @@ async function getWebsiteTokenSecret() {
               response.status
             }`
           );
-
         }
 
 
         script =
           response.body;
-
       }
 
 
@@ -1148,7 +2241,6 @@ async function getWebsiteTokenSecret() {
         throw new Error(
           "WT script was empty or invalid"
         );
-
       }
 
 
@@ -1193,7 +2285,6 @@ async function getWebsiteTokenSecret() {
 
 
   return websiteTokenSecretPromise;
-
 }
 
 
@@ -1229,9 +2320,15 @@ async function generateWebsiteToken(
 
   const token =
     crypto
-      .createHash("sha256")
-      .update(raw)
-      .digest("hex");
+      .createHash(
+        "sha256"
+      )
+      .update(
+        raw
+      )
+      .digest(
+        "hex"
+      );
 
 
   return {
@@ -1244,7 +2341,6 @@ async function generateWebsiteToken(
     timeWindow
 
   };
-
 }
 
 
@@ -1329,7 +2425,6 @@ async function getContents(
   ) {
 
     return response.data;
-
   }
 
 
@@ -1348,7 +2443,6 @@ async function getContents(
       response.body
 
   );
-
 }
 
 
@@ -1388,9 +2482,7 @@ class GoFileApiError
 
     this.data =
       data;
-
   }
-
 }
 
 
@@ -1447,7 +2539,6 @@ async function getContentsWithRetry(
       ) {
 
         throw error;
-
       }
 
 
@@ -1504,13 +2595,9 @@ async function getContentsWithRetry(
 
         websiteToken =
           generated.token;
-
       }
-
     }
-
   }
-
 }
 
 
@@ -1523,7 +2610,8 @@ async function getContentsWithRetry(
 async function getFileLink(
   fileId,
   accountToken,
-  websiteToken
+  websiteToken,
+  folderId = GOFILE_FOLDER
 ) {
 
   const url =
@@ -1555,7 +2643,7 @@ async function getFileLink(
             "application/json",
 
           "Referer":
-            `${GOFILE_WEB}/d/${GOFILE_FOLDER}`,
+            `${GOFILE_WEB}/d/${folderId}`,
 
           "Origin":
             GOFILE_WEB
@@ -1579,7 +2667,8 @@ async function getFileLink(
       response.data.data;
 
 
-    let realLink = null;
+    let realLink =
+      null;
 
 
     /*
@@ -1612,9 +2701,7 @@ async function getFileLink(
           link;
 
         break;
-
       }
-
     }
 
 
@@ -1667,9 +2754,7 @@ async function getFileLink(
         modTime
 
       };
-
     }
-
   }
 
 
@@ -1681,7 +2766,6 @@ async function getFileLink(
 
 
   return null;
-
 }
 
 
@@ -1694,7 +2778,8 @@ async function getFileLink(
 async function inspectFile(
   fileId,
   accountToken,
-  websiteToken
+  websiteToken,
+  folderId = GOFILE_FOLDER
 ) {
 
   const url =
@@ -1726,7 +2811,7 @@ async function inspectFile(
             "application/json",
 
           "Referer":
-            `${GOFILE_WEB}/d/${GOFILE_FOLDER}`,
+            `${GOFILE_WEB}/d/${folderId}`,
 
           "Origin":
             GOFILE_WEB
@@ -1762,7 +2847,6 @@ async function inspectFile(
       response.body
 
   };
-
 }
 
 
@@ -1795,7 +2879,6 @@ async function testDirectLink(
         "GOFILE_TOKEN não está configurado no Render"
 
     };
-
   }
 
 
@@ -1869,6 +2952,795 @@ async function testDirectLink(
 
       tokenConfigured:
         true,
+
+      error:
+        err.message
+
+    };
+  }
+}
+
+
+/*
+=========================================================
+ REQUEST HELPERS
+=========================================================
+*/
+
+function request(
+  method,
+  targetUrl,
+  options = {}
+) {
+
+  return new Promise(
+    (resolve, reject) => {
+
+      let parsed;
+
+      try {
+
+        parsed =
+          new URL(
+            targetUrl
+          );
+
+      } catch (error) {
+
+        reject(error);
+
+        return;
+      }
+
+
+      const transport =
+        parsed.protocol ===
+        "https:"
+          ? https
+          : http;
+
+
+      const headers =
+        options.headers ||
+        {};
+
+
+      const requestOptions = {
+
+        method,
+
+        hostname:
+          parsed.hostname,
+
+        port:
+          parsed.port ||
+          (
+            parsed.protocol ===
+            "https:"
+              ? 443
+              : 80
+          ),
+
+        path:
+          `${parsed.pathname}${parsed.search}`,
+
+        headers,
+
+        timeout:
+          options.timeout ||
+          REQUEST_TIMEOUT
+
+      };
+
+
+      const req =
+        transport.request(
+          requestOptions,
+          response => {
+
+            const chunks =
+              [];
+
+
+            response.on(
+              "data",
+              chunk => {
+
+                chunks.push(
+                  chunk
+                );
+
+              }
+            );
+
+
+            response.on(
+              "end",
+              () => {
+
+                const body =
+                  Buffer.concat(
+                    chunks
+                  );
+
+
+                resolve({
+
+                  status:
+                    response.statusCode,
+
+                  headers:
+                    response.headers,
+
+                  body:
+                    body.toString(
+                      "utf8"
+                    )
+
+                });
+
+              }
+            );
+
+          }
+        );
+
+
+      req.on(
+        "error",
+        reject
+      );
+
+
+      req.on(
+        "timeout",
+        () => {
+
+          req.destroy(
+            new Error(
+              "Request timeout"
+            )
+          );
+
+        }
+      );
+
+
+      if (
+        options.body
+      ) {
+
+        req.write(
+          options.body
+        );
+      }
+
+
+      req.end();
+
+    }
+  );
+}
+
+
+async function jsonRequest(
+  method,
+  targetUrl,
+  options = {}
+) {
+
+  const response =
+    await request(
+      method,
+      targetUrl,
+      options
+    );
+
+
+  let data =
+    null;
+
+
+  try {
+
+    data =
+      JSON.parse(
+        response.body
+      );
+
+  } catch (_) {}
+
+
+  return {
+
+    ...response,
+
+    data
+
+  };
+}
+
+
+const REQUEST_TIMEOUT =
+  30000;
+
+
+/*
+=========================================================
+ GUEST ACCOUNT CACHE
+=========================================================
+*/
+
+let guestAccountCache = {
+
+  token:
+    null,
+
+  timestamp:
+    0
+
+};
+
+
+const GUEST_ACCOUNT_CACHE_TIME =
+  30 * 60 * 1000;
+
+
+async function createAccount(
+  force = false
+) {
+
+  const now =
+    Date.now();
+
+
+  if (
+    !force &&
+    guestAccountCache.token &&
+    now -
+      guestAccountCache.timestamp
+      <
+      GUEST_ACCOUNT_CACHE_TIME
+  ) {
+
+    return {
+
+      token:
+        guestAccountCache.token
+
+    };
+  }
+
+
+  const response =
+    await jsonRequest(
+      "POST",
+      `${GOFILE_API}/accounts`,
+      {
+
+        headers: {
+
+          "User-Agent":
+            USER_AGENT,
+
+          "Accept":
+            "application/json",
+
+          "Content-Type":
+            "application/json",
+
+          "X-BL":
+            LANGUAGE,
+
+          "Origin":
+            GOFILE_WEB,
+
+          "Referer":
+            `${GOFILE_WEB}/`
+
+        },
+
+        body:
+          JSON.stringify({}),
+
+        timeout:
+          REQUEST_TIMEOUT
+
+      }
+    );
+
+
+  if (
+    response.status < 200 ||
+    response.status >= 300
+  ) {
+
+    throw new Error(
+      `GoFile account HTTP ${response.status}`
+    );
+  }
+
+
+  if (
+    !response.data ||
+    response.data.status !==
+      "ok"
+  ) {
+
+    throw new Error(
+      "GoFile account creation failed: " +
+      JSON.stringify(
+        response.data ||
+        response.body
+      )
+    );
+  }
+
+
+  const token =
+    response.data.data &&
+    (
+      response.data.data.token ||
+      response.data.data.accountToken
+    );
+
+
+  if (
+    !token
+  ) {
+
+    throw new Error(
+      "GoFile account token missing"
+    );
+  }
+
+
+  guestAccountCache = {
+
+    token,
+
+    timestamp:
+      Date.now()
+
+  };
+
+
+  console.log(
+    "[GoFile] Guest account created"
+  );
+
+
+  return {
+
+    token
+
+  };
+}
+
+
+/*
+=========================================================
+ FOLDER LOADER
+=========================================================
+*/
+
+async function loadFolder(
+  folderId = GOFILE_FOLDER,
+  force = false
+) {
+
+  if (
+    !folderId
+  ) {
+
+    throw new Error(
+      "GoFile folder ID is missing"
+    );
+  }
+
+
+  const cached =
+    folderCache.get(
+      folderId
+    );
+
+
+  if (
+    !force &&
+    cached &&
+    cached.files
+  ) {
+
+    return cached;
+  }
+
+
+  const account =
+    await createAccount();
+
+
+  const websiteToken =
+    await generateWebsiteToken(
+      account.token
+    );
+
+
+  const data =
+    await getContentsWithRetry(
+      folderId,
+      account.token,
+      websiteToken.token
+    );
+
+
+  const files =
+    [];
+
+
+  function walk(
+    node
+  ) {
+
+    if (
+      !node
+    ) {
+      return;
+    }
+
+
+    if (
+      Array.isArray(node)
+    ) {
+
+      for (
+        const child of node
+      ) {
+
+        walk(
+          child
+        );
+
+      }
+
+      return;
+    }
+
+
+    if (
+      typeof node !==
+      "object"
+    ) {
+
+      return;
+    }
+
+
+    if (
+      node.type ===
+      "file"
+    ) {
+
+      files.push(
+        node
+      );
+
+    }
+
+
+    if (
+      node.children
+    ) {
+
+      walk(
+        node.children
+      );
+
+    }
+
+
+    if (
+      node.data &&
+      node.data.children
+    ) {
+
+      walk(
+        node.data.children
+      );
+
+    }
+
+  }
+
+
+  if (
+    data &&
+    data.data
+  ) {
+
+    walk(
+      data.data
+    );
+
+  } else {
+
+    walk(
+      data
+    );
+  }
+
+
+  const result = {
+
+    folderId,
+
+    files:
+      sortFiles(
+        files
+      ),
+
+    loadedAt:
+      Date.now(),
+
+    accountToken:
+      account.token,
+
+    websiteToken:
+      websiteToken.token
+
+  };
+
+
+  folderCache.set(
+    folderId,
+    result
+  );
+
+
+  console.log(
+    `[GoFile] Folder ${folderId}: ${files.length} files`
+  );
+
+
+  return result;
+}
+
+
+/*
+=========================================================
+ LOAD ALL FOLDERS
+=========================================================
+*/
+
+async function loadAllFolders(
+  folderId = GOFILE_FOLDER,
+  force = false
+) {
+
+  return await loadFolder(
+    folderId,
+    force
+  );
+}
+
+
+/*
+=========================================================
+ FILE HELPERS
+=========================================================
+*/
+
+function getFileId(
+  file
+) {
+
+  return (
+    file &&
+    (
+      file.id ||
+      file.fileId ||
+      file.file_id
+    )
+  ) || null;
+}
+
+
+function getFileName(
+  file
+) {
+
+  return (
+    file &&
+    (
+      file.name ||
+      file.filename ||
+      file.fileName
+    )
+  ) ||
+  "Video";
+}
+
+
+function getFileThumbnail(
+  file
+) {
+
+  if (
+    !file
+  ) {
+    return null;
+  }
+
+
+  return (
+    file.thumbnail ||
+    file.thumbnailUrl ||
+    file.thumbnail_url ||
+    file.preview ||
+    null
+  );
+}
+
+
+function isVideoFile(
+  file
+) {
+
+  if (
+    !file
+  ) {
+    return false;
+  }
+
+
+  const name =
+    getFileName(
+      file
+    ).toLowerCase();
+
+
+  const mime =
+    String(
+      file.mimetype ||
+      file.mimeType ||
+      file.type ||
+      ""
+    ).toLowerCase();
+
+
+  if (
+    mime.startsWith(
+      "video/"
+    )
+  ) {
+
+    return true;
+  }
+
+
+  const extensions = [
+
+    ".mp4",
+    ".mkv",
+    ".avi",
+    ".mov",
+    ".wmv",
+    ".webm",
+    ".m4v",
+    ".ts",
+    ".m2ts",
+    ".flv",
+    ".mpeg",
+    ".mpg"
+
+  ];
+
+
+  return extensions.some(
+    extension =>
+      name.endsWith(
+        extension
+      )
+  );
+}
+
+
+function sortFiles(
+  files
+) {
+
+  const result =
+    [...files];
+
+
+  if (
+    GOFILE_SORT ===
+    "name_asc"
+  ) {
+
+    result.sort(
+      (a, b) =>
+        getFileName(a)
+          .localeCompare(
+            getFileName(b),
+            undefined,
+            {
+              numeric:
+                true,
+
+              sensitivity:
+                "base"
+            }
+          )
+    );
+
+
+  } else if (
+    GOFILE_SORT ===
+    "name_desc"
+  ) {
+
+    result.sort(
+      (a, b) =>
+        getFileName(b)
+          .localeCompare(
+            getFileName(a),
+            undefined,
+            {
+              numeric:
+                true,
+
+              sensitivity:
+                "base"
+            }
+          )
+    );
+
+
+  } else {
+
+    result.sort(
+      (a, b) => {
+
+        const aTime =
+          Number(
+            a.modTime ||
+            a.createTime ||
+            0
+          );
+
+
+        const bTime =
+          Number(
+            b.modTime ||
+            b.createTime ||
+            0
+          );
+
+
+        if (
+          GOFILE_SORT ===
+          "date_asc"
+        ) {
+
+          return (
+            aTime -
+            bTime
+          );
+        }
+
+
+        return (
+          bTime -
+          aTime
+        );
+
+      }
+    );
+  }
+
+
+  return result;
+}
 
       fileId,
 
@@ -2296,30 +4168,28 @@ function sortFiles(
 */
 
 async function loadFolder(
+  folderId = FOLDERS[0].id,
   force = false
 ) {
 
   const now =
     Date.now();
 
+  const cached =
+    folderCache.get(folderId);
 
   if (
     !force &&
-    folderCache.timestamp &&
-    now -
-      folderCache.timestamp
-      <
-      CACHE_TIME &&
-    folderCache.files.length
+    cached &&
+    cached.timestamp &&
+    now - cached.timestamp < CACHE_TIME &&
+    cached.files.length
   ) {
-
-    return folderCache.files;
-
+    return cached.files;
   }
 
-
   console.log(
-    `[GoFile] Loading folder ${GOFILE_FOLDER}`
+    `[GoFile] Loading folder ${folderId}`
   );
 
 
@@ -2349,7 +4219,7 @@ async function loadFolder(
 
   const contents =
     await getContentsWithRetry(
-      GOFILE_FOLDER,
+      folderId,
       account.token,
       generated.token
     );
@@ -2391,7 +4261,8 @@ async function loadFolder(
         await getFileLink(
           file.id,
           account.token,
-          generated.token
+          generated.token,
+          folderId
         );
 
 
@@ -2464,18 +4335,35 @@ async function loadFolder(
   );
 
 
-  folderCache = {
-
-    timestamp:
-      now,
-
-    files:
-      sortedFiles
-
-  };
+  folderCache.set(
+    folderId,
+    {
+      timestamp: now,
+      files: sortedFiles
+    }
+  );
 
 
   return sortedFiles;
+
+}
+
+
+/*
+=========================================================
+ LOAD ALL FOLDERS
+=========================================================
+*/
+
+async function loadAllFolders(
+  folderId = GOFILE_FOLDER,
+  force = false
+) {
+
+  return await loadFolder(
+    folderId,
+    force
+  );
 
 }
 
@@ -2486,67 +4374,63 @@ async function loadFolder(
 =========================================================
 */
 
-const manifest = {
+function buildManifest(folderId = null) {
 
-  id:
-    "com.andre.gofile",
+  const configured = !!folderId;
 
-  version:
-    "1.2.0",
+  return {
+    id:
+      "com.andre.gofile",
 
-  name:
-    "GoFile Vídeos CL",
+    version:
+      "1.4.0",
 
-  description:
-    "Streams videos from a GoFile folder.",
+    name:
+      "GoFile Videos",
 
-  logo:
-    "https://gofile.io/dist/img/favicon.png",
+    description:
+      "Streams videos from a GoFile folder.",
 
-  resources: [
+    logo:
+      "https://gofile.io/dist/img/favicon.png",
 
-    "catalog",
-    "meta",
-    "stream"
+    resources: [
+      "catalog",
+      "meta",
+      "stream"
+    ],
 
-  ],
+    types: [
+      "other"
+    ],
 
-  types: [
-    "other"
-  ],
+    catalogs: [
+      {
+        type: "other",
+        id: "gofile-videos",
+        name: "GoFile Videos"
+      }
+    ],
 
-  catalogs: [
+    idPrefixes: [
+      "gofile:"
+    ],
 
-    {
+    behaviorHints: {
+      configurable: true,
+      configurationRequired: !configured
+    },
 
-      type:
-        "other",
-
-      id:
-        "gofile-videos",
-
-      name:
-        "GoFile Vídeos UCL"
-
-    }
-
-  ],
-
-  idPrefixes: [
-    "gofile:"
-  ],
-
-  behaviorHints: {
-
-    configurable:
-      true,
-
-    configurationRequired:
-      false
-
-  }
-
-};
+    config: [
+      {
+        key: "gofile_folder",
+        type: "text",
+        title: "ID ou URL da pasta GoFile",
+        required: true
+      }
+    ]
+  };
+}
 
 
 /*
@@ -2614,7 +4498,8 @@ function sendJson(
 */
 
 async function diagnostic(
-  res
+  res,
+  folderId = GOFILE_FOLDER
 ) {
 
   const result = {
@@ -2623,10 +4508,10 @@ async function diagnostic(
       "ok",
 
     folderId:
-      GOFILE_FOLDER,
+      folderId,
 
     folderUrl:
-      `${GOFILE_WEB}/d/${GOFILE_FOLDER}`,
+      `${GOFILE_WEB}/d/${folderId}`,
 
     sort:
       GOFILE_SORT,
@@ -2769,7 +4654,7 @@ async function diagnostic(
 
       contents =
         await getContentsWithRetry(
-          GOFILE_FOLDER,
+          folderId,
           account.token,
           generated.token
         );
@@ -2857,7 +4742,6 @@ async function diagnostic(
 
   }
 
-
   return sendJson(
     res,
     result
@@ -2875,7 +4759,8 @@ async function diagnostic(
 async function proxyVideo(
   req,
   res,
-  file
+  file,
+  folderId = GOFILE_FOLDER
 ) {
 
   if (
@@ -2932,7 +4817,7 @@ async function proxyVideo(
       LANGUAGE,
 
     "Referer":
-      `${GOFILE_WEB}/d/${GOFILE_FOLDER}`,
+      `${GOFILE_WEB}/d/${folderId}`,
 
     "Origin":
       GOFILE_WEB,
@@ -3174,7 +5059,6 @@ async function proxyVideo(
 
     upstream.end();
 
-
   } catch (error) {
 
     console.error(
@@ -3221,7 +5105,8 @@ thumbnail
 async function proxyThumbnail(
   req,
   res,
-  file
+  file,
+  folderId = GOFILE_FOLDER
 ) {
 
   if (
@@ -3278,7 +5163,7 @@ async function proxyThumbnail(
       LANGUAGE,
 
     "Referer":
-      `${GOFILE_WEB}/d/${GOFILE_FOLDER}`,
+      `${GOFILE_WEB}/d/${folderId}`,
 
     "Origin":
       GOFILE_WEB,
@@ -3500,7 +5385,6 @@ async function proxyThumbnail(
 
     upstream.end();
 
-
   } catch (error) {
 
     console.error(
@@ -3517,6 +5401,346 @@ async function proxyThumbnail(
     );
 
   }
+
+}
+
+
+/*
+=========================================================
+ CONFIGURATION / ROUTING HELPERS
+=========================================================
+*/
+
+function normalizeFolderId(value) {
+
+  if (!value) return null;
+
+  let folder =
+    String(value).trim();
+
+
+  try {
+
+    if (/^https?:\/\//i.test(folder)) {
+
+      const url =
+        new URL(folder);
+
+      const parts =
+        url.pathname
+          .split("/")
+          .filter(Boolean);
+
+      const dIndex =
+        parts.indexOf("d");
+
+
+      if (
+        dIndex >= 0 &&
+        parts[dIndex + 1]
+      ) {
+
+        folder =
+          parts[dIndex + 1];
+
+      }
+
+    }
+
+  } catch (_) {}
+
+
+  try {
+
+    folder =
+      decodeURIComponent(folder);
+
+  } catch (_) {}
+
+
+  folder =
+    folder
+      .replace(/^\/+|\/+$/g, "")
+      .trim();
+
+
+  if (!folder) return null;
+
+
+  if (
+    folder === "." ||
+    folder === ".." ||
+    folder.includes("/") ||
+    folder.includes("\\")
+  ) {
+
+    return null;
+
+  }
+
+
+  return folder;
+
+}
+
+
+function getAddonContext(pathname) {
+
+  const prefixed =
+    pathname.match(
+      /^\/([^/]+)(\/.*)$/
+    );
+
+
+  if (!prefixed) {
+
+    return {
+      folderId: null,
+      addonPath: pathname
+    };
+
+  }
+
+
+  const candidate =
+    normalizeFolderId(
+      prefixed[1]
+    );
+
+  const rest =
+    prefixed[2];
+
+
+  const isAddonRoute =
+
+    rest === "/manifest.json" ||
+
+    rest === "/configure" ||
+
+    rest === "/diagnostico" ||
+
+    rest === "/refresh" ||
+
+    rest === "/teste-link" ||
+
+    rest === "/teste-file" ||
+
+    rest === "/teste-wt" ||
+
+    rest.startsWith(
+      "/catalog/"
+    ) ||
+
+    rest.startsWith(
+      "/meta/"
+    ) ||
+
+    rest.startsWith(
+      "/thumbnail/"
+    ) ||
+
+    rest.startsWith(
+      "/proxy/"
+    ) ||
+
+    rest.startsWith(
+      "/stream/"
+    );
+
+
+  if (
+    candidate &&
+    isAddonRoute
+  ) {
+
+    return {
+
+      folderId:
+        candidate,
+
+      addonPath:
+        rest
+
+    };
+
+  }
+
+
+  return {
+
+    folderId:
+      null,
+
+    addonPath:
+      pathname
+
+  };
+
+}
+
+
+function escapeHtml(value) {
+
+  return String(value || "")
+    .replace(
+      /&/g,
+      "&amp;"
+    )
+    .replace(
+      /</g,
+      "&lt;"
+    )
+    .replace(
+      />/g,
+      "&gt;"
+    )
+    .replace(
+      /\"/g,
+      "&quot;"
+    )
+    .replace(
+      /'/g,
+      "&#039;"
+    );
+
+}
+
+
+function renderConfigurePage(
+  req,
+  res,
+  currentFolder = ""
+) {
+
+  const host =
+    req.headers.host;
+
+  const protocol =
+    req.headers["x-forwarded-proto"] ||
+    "https";
+
+
+  const httpsBase =
+    `${protocol}://${host}`;
+
+
+  const value =
+    escapeHtml(
+      currentFolder
+    );
+
+
+  res.statusCode =
+    200;
+
+
+  res.setHeader(
+    "Content-Type",
+    "text/html; charset=utf-8"
+  );
+
+
+  res.setHeader(
+    "Cache-Control",
+    "no-store"
+  );
+
+
+  res.end(`<!doctype html>
+<html lang="pt-PT">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Configurar GoFile Videos</title>
+<style>
+body{font-family:Arial,sans-serif;background:#111;color:#eee;margin:0;padding:30px}
+.card{max-width:620px;margin:40px auto;background:#1d1d1d;padding:28px;border-radius:14px}
+h1{margin-top:0}
+label{display:block;margin:20px 0 8px}
+input{width:100%;box-sizing:border-box;padding:13px;border-radius:8px;border:1px solid #555;background:#111;color:#fff;font-size:16px}
+button{margin-top:20px;width:100%;padding:14px;border:0;border-radius:8px;background:#fff;color:#111;font-size:16px;font-weight:bold;cursor:pointer}
+small{color:#aaa;line-height:1.5}
+#error{color:#ff7777;margin-top:15px}
+</style>
+</head>
+<body>
+<div class="card">
+<h1>GoFile Videos</h1>
+<p>Escolhe a pasta GoFile que queres usar neste addon.</p>
+<form id="form">
+<label for="folder">ID ou URL da pasta GoFile</label>
+<input id="folder" value="${value}" placeholder="Hg4qUe ou https://gofile.io/d/Hg4qUe" required>
+<small>Podes colar diretamente o ID ou o URL completo da pasta.</small>
+<button type="submit">Adicionar ao Stremio</button>
+<div id="error"></div>
+</form>
+</div>
+<script>
+const base = ${JSON.stringify(httpsBase)};
+const form = document.getElementById("form");
+const input = document.getElementById("folder");
+const error = document.getElementById("error");
+
+function extractFolder(value){
+  value = String(value || "").trim();
+
+  if(/^https?:\\/\\//i.test(value)){
+    try{
+      const u = new URL(value);
+      const parts = u.pathname.split("/").filter(Boolean);
+      const i = parts.indexOf("d");
+
+      if(i >= 0 && parts[i+1])
+        value = parts[i+1];
+
+    }catch(e){}
+  }
+
+  value = value.replace(/^\\/+|\\/+$/g, "").trim();
+
+  return value;
+}
+
+form.addEventListener("submit", function(e){
+  e.preventDefault();
+
+  error.textContent = "";
+
+  const folder =
+    extractFolder(
+      input.value
+    );
+
+  if(
+    !folder ||
+    folder.includes("/") ||
+    folder.includes("\\\\")
+  ){
+
+    error.textContent =
+      "Indica um ID ou URL válido de uma pasta GoFile.";
+
+    return;
+
+  }
+
+  const installUrl =
+    base.replace(
+      /^https?:\\/\\//i,
+      "stremio://"
+    ) +
+    "/" +
+    encodeURIComponent(folder) +
+    "/manifest.json";
+
+
+  window.location.href =
+    installUrl;
+
+});
+</script>
+</body>
+</html>`);
 
 }
 
@@ -3547,6 +5771,26 @@ const server =
           parsed.pathname;
 
 
+        const {
+          folderId,
+          addonPath
+        } =
+          getAddonContext(
+            pathname
+          );
+
+
+        const activeFolderId =
+          folderId ||
+          GOFILE_FOLDER;
+
+
+        const addonBasePath =
+          folderId
+            ? `/${encodeURIComponent(folderId)}`
+            : "";
+
+
         /*
         ---------------------------------------------------
         CORS
@@ -3557,6 +5801,7 @@ const server =
           "Access-Control-Allow-Origin",
           "*"
         );
+
 
         res.setHeader(
           "Access-Control-Allow-Headers",
@@ -3585,18 +5830,40 @@ const server =
 
         /*
         ---------------------------------------------------
+        CONFIGURE
+        ---------------------------------------------------
+        */
+
+        if (
+          addonPath ===
+          "/configure"
+        ) {
+
+          return renderConfigurePage(
+            req,
+            res,
+            folderId || ""
+          );
+
+        }
+
+
+        /*
+        ---------------------------------------------------
         MANIFEST
         ---------------------------------------------------
         */
 
         if (
-          pathname ===
+          addonPath ===
           "/manifest.json"
         ) {
 
           return sendJson(
             res,
-            manifest
+            buildManifest(
+              folderId
+            )
           );
 
         }
@@ -3609,12 +5876,13 @@ const server =
         */
 
         if (
-          pathname ===
+          addonPath ===
           "/diagnostico"
         ) {
 
           return await diagnostic(
-            res
+            res,
+            activeFolderId
           );
 
         }
@@ -3627,12 +5895,29 @@ const server =
         */
 
         if (
-          pathname ===
+          addonPath ===
           "/teste-link"
         ) {
 
-          try {
+          return await testDirectLink(
+            res,
+            activeFolderId
+          );
 
+        }
+
+
+        /*
+        ---------------------------------------------------
+        TEST FILE
+        ---------------------------------------------------
+        */
+
+        if (
+          addonPath ===
+          "/teste-file"
+                ) {
+          try {
             const account =
               await createAccount();
 
@@ -3668,19 +5953,15 @@ const server =
             return sendJson(
               res,
               {
-
                 ok:
                   false,
-
                 error:
                   err.message
-
               },
               500
             );
 
           }
-
         }
 
 
@@ -3691,7 +5972,7 @@ const server =
         */
 
         if (
-          pathname ===
+          addonPath ===
           "/teste-file"
         ) {
 
@@ -3718,7 +5999,8 @@ const server =
               await inspectFile(
                 fileId,
                 account.token,
-                generated.token
+                generated.token,
+                activeFolderId
               );
 
 
@@ -3732,13 +6014,10 @@ const server =
             return sendJson(
               res,
               {
-
                 ok:
                   false,
-
                 error:
                   error.message
-
               },
               500
             );
@@ -3755,31 +6034,25 @@ const server =
         */
 
         if (
-          pathname ===
+          addonPath ===
           "/refresh"
         ) {
 
-          folderCache = {
-
-            timestamp:
-              0,
-
-            files:
-              []
-
-          };
+          if (folderId) {
+            folderCache.delete(folderId);
+          } else {
+            folderCache.clear();
+          }
 
 
           return sendJson(
             res,
             {
-
               ok:
                 true,
 
               message:
                 "Cache cleared"
-
             }
           );
 
@@ -3793,7 +6066,7 @@ const server =
         */
 
         if (
-          pathname ===
+          addonPath ===
           "/teste-wt"
         ) {
 
@@ -3812,7 +6085,6 @@ const server =
             return sendJson(
               res,
               {
-
                 ok:
                   true,
 
@@ -3830,7 +6102,6 @@ const server =
                     0,
                     16
                   ) + "..."
-
               }
             );
 
@@ -3839,13 +6110,11 @@ const server =
             return sendJson(
               res,
               {
-
                 ok:
                   false,
 
                 error:
                   error.message
-
               },
               500
             );
@@ -3862,8 +6131,8 @@ const server =
         */
 
         const catalogMatch =
-          pathname.match(
-            /^\/catalog\/other\/gofile-videos(?:\.json)?$/
+          addonPath.match(
+            /^\/catalog\/other\/([^/]+)(?:\.json)?$/
           );
 
 
@@ -3871,8 +6140,21 @@ const server =
           catalogMatch
         ) {
 
+          if (catalogMatch[1] !== "gofile-videos") {
+
+            return sendJson(
+              res,
+              { metas: [] },
+              404
+            );
+
+          }
+
+
           const files =
-            await loadFolder();
+            await loadFolder(
+              activeFolderId
+            );
 
 
           const protocol =
@@ -3893,7 +6175,6 @@ const server =
                 index
               ) => {
 
-
                 let poster =
                   null;
 
@@ -3904,7 +6185,7 @@ const server =
 
                   poster =
                     `${protocol}://${host}` +
-                    `/thumbnail/` +
+                    `${addonBasePath}/thumbnail/` +
                     `${encodeURIComponent(
                       file.id
                     )}`;
@@ -3928,7 +6209,13 @@ const server =
                       file.name
                     ),
 
-                  poster
+                  description:
+                    file.name,
+
+                  poster,
+
+                  posterShape:
+                    "landscape"
 
                 };
 
@@ -3953,7 +6240,7 @@ const server =
         */
 
         const metaMatch =
-          pathname.match(
+          addonPath.match(
             /^\/meta\/other\/([^/]+)\.json$/
           );
 
@@ -3973,7 +6260,9 @@ const server =
 
 
           const files =
-            await loadFolder();
+            await loadFolder(
+              activeFolderId
+            );
 
 
           const file =
@@ -3991,7 +6280,6 @@ const server =
             return sendJson(
               res,
               {
-
                 meta: {
 
                   id:
@@ -4004,7 +6292,6 @@ const server =
                     "GoFile Video"
 
                 }
-
               }
             );
 
@@ -4026,7 +6313,7 @@ const server =
             file.thumbnail
               ? (
                 `${protocol}://${host}` +
-                `/thumbnail/` +
+                `${addonBasePath}/thumbnail/` +
                 `${encodeURIComponent(
                   file.id
                 )}`
@@ -4037,7 +6324,6 @@ const server =
           return sendJson(
             res,
             {
-
               meta: {
 
                 id:
@@ -4054,10 +6340,12 @@ const server =
                 description:
                   file.name,
 
-                poster
+                poster,
+
+                posterShape:
+                  "landscape"
 
               }
-
             }
           );
 
@@ -4071,7 +6359,7 @@ const server =
         */
 
         const thumbnailMatch =
-          pathname.match(
+          addonPath.match(
             /^\/thumbnail\/([^/]+)$/
           );
 
@@ -4092,7 +6380,9 @@ const server =
 
 
           const files =
-            await loadFolder();
+            await loadAllFolders(
+              activeFolderId
+            );
 
 
           const file =
@@ -4120,7 +6410,8 @@ const server =
           return await proxyThumbnail(
             req,
             res,
-            file
+            file,
+            activeFolderId
           );
 
         }
@@ -4133,7 +6424,7 @@ const server =
         */
 
         const proxyMatch =
-          pathname.match(
+          addonPath.match(
             /^\/proxy\/([^/]+)$/
           );
 
@@ -4154,7 +6445,9 @@ const server =
 
 
           const files =
-            await loadFolder();
+            await loadAllFolders(
+              activeFolderId
+            );
 
 
           const file =
@@ -4182,7 +6475,8 @@ const server =
           return await proxyVideo(
             req,
             res,
-            file
+            file,
+            activeFolderId
           );
 
         }
@@ -4195,7 +6489,7 @@ const server =
         */
 
         const streamMatch =
-          pathname.match(
+          addonPath.match(
             /^\/stream\/other\/([^/]+)\.json$/
           );
 
@@ -4215,7 +6509,9 @@ const server =
 
 
           const files =
-            await loadFolder();
+            await loadAllFolders(
+              activeFolderId
+            );
 
 
           const file =
@@ -4267,7 +6563,7 @@ const server =
 
           const proxyUrl =
             `${protocol}://${host}` +
-            `/proxy/` +
+            `${addonBasePath}/proxy/` +
             `${encodeURIComponent(
               file.id
             )}`;
@@ -4276,7 +6572,6 @@ const server =
           return sendJson(
             res,
             {
-
               streams: [
 
                 {
@@ -4300,7 +6595,6 @@ const server =
                 }
 
               ]
-
             }
           );
 
@@ -4314,22 +6608,25 @@ const server =
         */
 
         if (
-          pathname === "/" ||
-          pathname === ""
+          addonPath === "/" ||
+          addonPath === ""
         ) {
 
           return sendJson(
             res,
             {
-
               addon:
                 "ok",
 
               name:
                 "GoFile Videos",
 
-              folder:
-                GOFILE_FOLDER,
+              folders:
+                FOLDERS.map(folder => ({
+                  name: folder.name,
+                  id: folder.id,
+                  catalogId: folder.catalogId
+                })),
 
               sort:
                 GOFILE_SORT,
@@ -4361,10 +6658,8 @@ const server =
         return sendJson(
           res,
           {
-
             error:
               "notFound"
-
           },
           404
         );
@@ -4381,11 +6676,9 @@ const server =
         return sendJson(
           res,
           {
-
             error:
               error.message ||
               "Internal server error"
-
           },
           500
         );
@@ -4411,41 +6704,53 @@ server.listen(
       "=========================================="
     );
 
+
     console.log(
       "GoFile Stremio Addon"
     );
+
 
     console.log(
       `Port: ${PORT}`
     );
 
+
     console.log(
-      `Folder: ${GOFILE_FOLDER}`
+      `Folders: ${FOLDERS.map(folder =>
+        `${folder.name}=${folder.id}`
+      ).join(" | ")}`
     );
+
 
     console.log(
       `Sort: ${GOFILE_SORT}`
     );
 
+
     console.log(
       `Language: ${LANGUAGE}`
     );
+
 
     console.log(
       `User-Agent: ${USER_AGENT}`
     );
 
+
     console.log(
       "Dynamic WT enabled"
     );
+
 
     console.log(
       "Thumbnail proxy enabled"
     );
 
+
     console.log(
       "Video proxy enabled"
     );
+
 
     console.log(
       "=========================================="

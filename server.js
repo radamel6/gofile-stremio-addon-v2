@@ -2406,73 +2406,22 @@ async function loadFolder(
       );
 
 
-    /*
-    -------------------------------------------------------
-    The folder API often returns:
-    "link": true
+   /*
+-------------------------------------------------------
+The folder contents endpoint already gives us the
+file metadata. We do NOT require the playable link
+here.
 
-    Therefore we query the individual file endpoint.
-    -------------------------------------------------------
-    */
+The actual GoFile video link will be resolved later,
+when Stremio requests the stream.
+-------------------------------------------------------
+*/
 
-    if (
-      !file.link
-    ) {
-
-      const fileInfo =
-        await getFileLink(
-          file.id,
-          account.token,
-          generated.token,
-          folderId
-        );
-
-
-      if (
-        fileInfo
-      ) {
-
-        file.link =
-          fileInfo.link;
-
-        file.thumbnail =
-          fileInfo.thumbnail;
-
-        file.createTime =
-          fileInfo.createTime;
-
-        file.modTime =
-          fileInfo.modTime;
-
-      }
-
-    }
-
-
-    /*
-    -------------------------------------------------------
-    If metadata already exists in folder response,
-    keep it. Otherwise individual endpoint filled it.
-    -------------------------------------------------------
-    */
-
-    if (
-      file.link
-    ) {
-
-      files.push(
-        file
-      );
-
-    } else {
-
-      console.log(
-        `[GoFile] No playable link for: ${file.name}`
-      );
-
-    }
-
-  }
+if (
+  file.id
+) {
+  files.push(file);
+}
 
 
   /*
@@ -2970,7 +2919,103 @@ async function diagnostic(
 
 }
 
+/*
+=========================================================
+ RESOLVE VIDEO LINK ON DEMAND
+=========================================================
+*/
 
+async function resolveVideoLink(
+  file,
+  folderId
+) {
+
+  if (
+    file &&
+    typeof file.link === "string" &&
+    file.link.startsWith("http")
+  ) {
+    return file;
+  }
+
+  if (
+    !file ||
+    !file.id
+  ) {
+    return null;
+  }
+
+  try {
+
+    console.log(
+      `[GoFile] Resolving video link: ${file.name}`
+    );
+
+    const account =
+      await createAccount();
+
+    const generated =
+      await generateWebsiteToken(
+        account.token
+      );
+
+    const fileInfo =
+      await getFileLink(
+        file.id,
+        account.token,
+        generated.token,
+        folderId
+      );
+
+    if (
+      !fileInfo ||
+      !fileInfo.link
+    ) {
+
+      console.log(
+        `[GoFile] Unable to resolve link: ${file.name}`
+      );
+
+      return null;
+    }
+
+    file.link =
+      fileInfo.link;
+
+    if (
+      fileInfo.thumbnail
+    ) {
+      file.thumbnail =
+        fileInfo.thumbnail;
+    }
+
+    if (
+      fileInfo.createTime
+    ) {
+      file.createTime =
+        fileInfo.createTime;
+    }
+
+    if (
+      fileInfo.modTime
+    ) {
+      file.modTime =
+        fileInfo.modTime;
+    }
+
+    return file;
+
+  } catch (error) {
+
+    console.error(
+      `[GoFile] Error resolving video link:`,
+      error.message
+    );
+
+    return null;
+  }
+}
+ 
 /*
 =========================================================
  VIDEO PROXY
@@ -2984,6 +3029,12 @@ async function proxyVideo(
   folderId = GOFILE_FOLDER
 ) {
 
+  file =
+    await resolveVideoLink(
+      file,
+      folderId
+    );
+
   if (
     !file ||
     !file.link ||
@@ -2996,9 +3047,7 @@ async function proxyVideo(
     return res.end(
       "Video link not available"
     );
-
   }
-
 
   let account;
 
@@ -4842,19 +4891,7 @@ const server =
           }
 
 
-          if (
-            !file.link
-          ) {
-
-            return sendJson(
-              res,
-              {
-                streams: []
-              }
-            );
-
-          }
-
+          
 
           const protocol =
             req.headers[
